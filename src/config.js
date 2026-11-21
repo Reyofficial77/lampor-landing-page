@@ -23,7 +23,7 @@ export const PLATFORMS = {
     req: 'Windows 10/11 (64-bit)',
     ext: /\.(exe|zip|msi)$/i,
     hint: /win/i,
-    icon: '???',
+    icon: 'monitor',
   },
   android: {
     id: 'android',
@@ -31,7 +31,7 @@ export const PLATFORMS = {
     req: 'Android 7.0 (Nougat) ke atas',
     ext: /\.apk$/i,
     hint: /./,
-    icon: '??',
+    icon: 'smartphone',
   },
 }
 

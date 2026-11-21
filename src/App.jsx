@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
+import FeatherIcon from './components/FeatherIcon'
 import DownloadCard from './components/DownloadCard'
 import { detectOS } from './lib/detectOS'
 import { fetchDownloads } from './lib/releases'
 import { GAME, RELEASES_URL } from './config'
 
 const FEATURES = [
-  ['??', 'AI Lampor', 'Makhluk yang memburu Anda menembus gelap, dengan sistem kewarasan yang terus tergerus.'],
-  ['???', 'Tiga Babak Malam', 'Dari menyalakan obor penolak bala hingga membakar benda ritual di tungku sebelum fajar.'],
-  ['??', 'Bertahan Hidup', 'Kelola stamina, senter, dan inventaris. Setiap keputusan berisiko.'],
-  ['??', 'Desktop & Sentuh', 'Kontrol keyboard-mouse di Windows dan joystick virtual yang bisa diatur di Android.'],
+  ['eye', 'AI Lampor', 'Makhluk yang memburu Anda menembus gelap, dengan sistem kewarasan yang terus tergerus.'],
+  ['moon', 'Tiga Babak Malam', 'Dari menyalakan obor penolak bala hingga membakar benda ritual di tungku sebelum fajar.'],
+  ['zap', 'Bertahan Hidup', 'Kelola stamina, senter, dan inventaris. Setiap keputusan berisiko.'],
+  ['sliders', 'Desktop & Sentuh', 'Kontrol keyboard-mouse di Windows dan joystick virtual yang bisa diatur di Android.'],
 ]
 const CHAPTERS = [
-  ['I', 'Pertahanan Awal', '01.00–02.30', 'Nyalakan lima obor dan barikade tiga pintu rumah.'],
-  ['II', 'Ritual Pemutus Kutukan', '02.30–04.00', 'Kumpulkan kemenyan, bunga tujuh rupa, keris pusaka, dan tanah kuburan.'],
-  ['III', 'Klimaks Pembakaran', '04.00–05.00', 'Bakar semua di tungku dan bertahan sampai fajar.'],
+  ['I', 'Pertahanan Awal', '01.00â€“02.30', 'Nyalakan lima obor dan barikade tiga pintu rumah.'],
+  ['II', 'Ritual Pemutus Kutukan', '02.30â€“04.00', 'Kumpulkan kemenyan, bunga tujuh rupa, keris pusaka, dan tanah kuburan.'],
+  ['III', 'Klimaks Pembakaran', '04.00â€“05.00', 'Bakar semua di tungku dan bertahan sampai fajar.'],
 ]
 const OS_NAMES = { ios: 'iOS', mac: 'macOS', linux: 'Linux', unknown: 'perangkat ini' }
 
@@ -44,7 +45,7 @@ export default function App() {
             Bertahan dari malam, kumpulkan benda ritual, lalu bakar semuanya sebelum fajar.
           </p>
           <a className="btn btn--lg" href="#unduh">Unduh Sekarang</a>
-          <p className="small">Windows (64-bit) · Android 7+ · Gratis</p>
+          <p className="small">Windows (64-bit) Â· Android 7+ Â· Gratis</p>
         </section>
 
         <section id="unduh" className="section">
@@ -69,7 +70,7 @@ export default function App() {
           <h2>Fitur</h2>
           <div className="grid">
             {FEATURES.map(([i, t, d]) => (
-              <div className="feat" key={t}><span>{i}</span><h3>{t}</h3><p>{d}</p></div>
+              <div className="feat" key={t}><span><FeatherIcon name={i} size={28} /></span><h3>{t}</h3><p>{d}</p></div>
             ))}
           </div>
         </section>
@@ -85,7 +86,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <p>© {new Date().getFullYear()} {GAME.developer} · {GAME.name} · Lisensi MIT</p>
+        <p>Â© {new Date().getFullYear()} {GAME.developer} Â· {GAME.name} Â· Lisensi MIT</p>
       </footer>
     </>
   )
