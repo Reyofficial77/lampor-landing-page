@@ -1,0 +1,92 @@
+import { useEffect, useMemo, useState } from 'react'
+import DownloadCard from './components/DownloadCard'
+import { detectOS } from './lib/detectOS'
+import { fetchDownloads } from './lib/releases'
+import { GAME, RELEASES_URL } from './config'
+
+const FEATURES = [
+  ['??', 'AI Lampor', 'Makhluk yang memburu Anda menembus gelap, dengan sistem kewarasan yang terus tergerus.'],
+  ['???', 'Tiga Babak Malam', 'Dari menyalakan obor penolak bala hingga membakar benda ritual di tungku sebelum fajar.'],
+  ['??', 'Bertahan Hidup', 'Kelola stamina, senter, dan inventaris. Setiap keputusan berisiko.'],
+  ['??', 'Desktop & Sentuh', 'Kontrol keyboard-mouse di Windows dan joystick virtual yang bisa diatur di Android.'],
+]
+const CHAPTERS = [
+  ['I', 'Pertahanan Awal', '01.00–02.30', 'Nyalakan lima obor dan barikade tiga pintu rumah.'],
+  ['II', 'Ritual Pemutus Kutukan', '02.30–04.00', 'Kumpulkan kemenyan, bunga tujuh rupa, keris pusaka, dan tanah kuburan.'],
+  ['III', 'Klimaks Pembakaran', '04.00–05.00', 'Bakar semua di tungku dan bertahan sampai fajar.'],
+]
+const OS_NAMES = { ios: 'iOS', mac: 'macOS', linux: 'Linux', unknown: 'perangkat ini' }
+
+export default function App() {
+  const os = useMemo(detectOS, [])
+  const [dl, setDl] = useState({ version: GAME.version, fallback: RELEASES_URL })
+  useEffect(() => { fetchDownloads().then(setDl) }, [])
+
+  const supported = os === 'windows' || os === 'android'
+  const order = os === 'android' ? ['android', 'windows'] : ['windows', 'android']
+
+  return (
+    <>
+      <header className="nav">
+        <a className="brand" href="#top"><img src="/icon.png" alt="" width="32" height="32" />LAMPOR</a>
+        <nav>
+          <a href="#fitur">Fitur</a>
+          <a href="#babak">Babak</a>
+          <a href="#unduh">Unduh</a>
+        </nav>
+      </header>
+
+      <main id="top">
+        <section className="hero">
+          <p className="eyebrow">Horor Survival Folklor Indonesia</p>
+          <h1>LAMPOR<span>Malam Jahanam</span></h1>
+          <p className="lead">
+            Bertahan dari malam, kumpulkan benda ritual, lalu bakar semuanya sebelum fajar.
+          </p>
+          <a className="btn btn--lg" href="#unduh">Unduh Sekarang</a>
+          <p className="small">Windows (64-bit) · Android 7+ · Gratis</p>
+        </section>
+
+        <section id="unduh" className="section">
+          <h2>Unduh Game</h2>
+          {supported ? (
+            <p className="sub">Kami mendeteksi Anda memakai <strong>{os === 'windows' ? 'Windows' : 'Android'}</strong>.</p>
+          ) : (
+            <p className="notice">
+              Game ini belum tersedia untuk {OS_NAMES[os]}. Unduh dari Windows (64-bit) atau Android 7+.
+            </p>
+          )}
+          <div className="cards">
+            {order.map((k) => (
+              <DownloadCard key={k} platform={k} data={dl[k]} fallback={dl.fallback}
+                version={dl.version} detected={os === k} />
+            ))}
+          </div>
+          <p className="small">Semua rilis: <a href={RELEASES_URL} target="_blank" rel="noreferrer">GitHub Releases</a></p>
+        </section>
+
+        <section id="fitur" className="section">
+          <h2>Fitur</h2>
+          <div className="grid">
+            {FEATURES.map(([i, t, d]) => (
+              <div className="feat" key={t}><span>{i}</span><h3>{t}</h3><p>{d}</p></div>
+            ))}
+          </div>
+        </section>
+
+        <section id="babak" className="section">
+          <h2>Alur Permainan</h2>
+          <ol className="chapters">
+            {CHAPTERS.map(([n, t, time, d]) => (
+              <li key={n}><b>{n}</b><div><h3>{t} <small>{time}</small></h3><p>{d}</p></div></li>
+            ))}
+          </ol>
+        </section>
+      </main>
+
+      <footer className="footer">
+        <p>© {new Date().getFullYear()} {GAME.developer} · {GAME.name} · Lisensi MIT</p>
+      </footer>
+    </>
+  )
+}
