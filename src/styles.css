@@ -44,3 +44,49 @@ html{scroll-padding-top:4.5rem}
 .reveal{opacity:0;transform:translateY(28px);transition:opacity .7s ease var(--d,0ms),transform .7s cubic-bezier(.2,.7,.2,1) var(--d,0ms)}
 .reveal.is-visible{opacity:1;transform:none}
 @media (prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
+/* ===== Animasi & hover ===== */
+.hero{position:relative;overflow:hidden}
+.hero > *{position:relative;z-index:1}
+.hero::before,.hero::after{content:"";position:absolute;inset:-20% 0 0;pointer-events:none;z-index:0;background-repeat:repeat-x;background-size:520px 100%;opacity:.55;animation:embers 14s linear infinite}
+.hero::before{background-image:radial-gradient(2px 2px at 40px 90%,#ff8a5c,transparent),radial-gradient(3px 3px at 170px 95%,#d4433c,transparent),radial-gradient(2px 2px at 300px 85%,#ffb4ac,transparent),radial-gradient(2px 2px at 450px 92%,#ff8a5c,transparent)}
+.hero::after{background-size:380px 100%;background-image:radial-gradient(2px 2px at 90px 90%,#d4433c,transparent),radial-gradient(3px 3px at 230px 96%,#ff8a5c,transparent),radial-gradient(2px 2px at 340px 88%,#ffb4ac,transparent);animation-duration:20s;animation-direction:reverse;opacity:.35}
+@keyframes embers{from{transform:translateY(25%)}to{transform:translateY(-35%)}}
+h1{animation:flicker 5s infinite}
+@keyframes flicker{0%,100%{text-shadow:0 0 40px rgba(212,67,60,.35)}45%{text-shadow:0 0 60px rgba(212,67,60,.6)}50%{text-shadow:0 0 22px rgba(212,67,60,.2)}55%{text-shadow:0 0 56px rgba(212,67,60,.55)}}
+
+.nav nav a{position:relative;padding:.2rem 0;transition:color .2s}
+.nav nav a::after{content:"";position:absolute;left:0;bottom:-2px;height:2px;width:100%;background:var(--accent);transform:scaleX(0);transform-origin:left;transition:transform .3s ease}
+.nav nav a:hover::after{transform:scaleX(1)}
+.brand img{transition:transform .4s ease,filter .4s ease}
+.brand:hover img{transform:rotate(-8deg) scale(1.15);filter:drop-shadow(0 0 8px var(--accent))}
+
+.btn{position:relative;overflow:hidden;transition:background .2s,transform .2s,box-shadow .25s}
+.btn::after{content:"";position:absolute;top:0;left:-80%;width:50%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.28),transparent);transform:skewX(-20deg);transition:left .6s ease}
+.btn:hover{box-shadow:0 8px 28px rgba(212,67,60,.45)}
+.btn:hover::after{left:130%}
+.btn:active{transform:translateY(0) scale(.97)}
+.btn--lg{animation:pulse 2.8s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(212,67,60,.5)}60%{box-shadow:0 0 0 14px rgba(212,67,60,0)}}
+
+.card.is-visible,.feat.is-visible,.chapters li.is-visible{transition:opacity .7s ease var(--d,0ms),transform .35s ease,box-shadow .35s ease,border-color .35s ease,background .35s ease}
+.card:hover{transform:translateY(-8px);border-color:var(--accent);box-shadow:0 14px 40px rgba(212,67,60,.3)}
+.card__icon{transition:transform .35s ease,color .35s ease}
+.card:hover .card__icon{transform:scale(1.15) rotate(-4deg);color:#ff8a5c}
+.card--detected{animation:glow 3s ease-in-out infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 22px rgba(212,67,60,.2)}50%{box-shadow:0 0 42px rgba(212,67,60,.45)}}
+.card--detected:hover{animation:none}
+.badge{animation:float 2.4s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+
+.feat{border-left-width:3px;transition:border-color .3s}
+.feat:hover{transform:translateY(-6px);background:var(--high);border-left-color:var(--accent);box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.feat span{display:inline-block;color:var(--accent);transition:transform .35s ease}
+.feat:hover span{transform:scale(1.2) rotate(-6deg)}
+
+.chapters li:hover{transform:translateX(8px);background:var(--high);box-shadow:-4px 0 0 var(--accent)}
+.chapters b{transition:text-shadow .3s,transform .3s}
+.chapters li:hover b{text-shadow:0 0 18px rgba(212,67,60,.8);transform:scale(1.12)}
+
+.small a,.footer a{transition:color .2s}
+.small a:hover{color:var(--text)}
+@media (prefers-reduced-motion:reduce){.hero::before,.hero::after,h1,.btn--lg,.card--detected,.badge{animation:none}.card:hover,.feat:hover,.chapters li:hover{transform:none}}
