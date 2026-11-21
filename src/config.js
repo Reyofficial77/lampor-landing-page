@@ -36,3 +36,4 @@ export const PLATFORMS = {
 }
 
 export const RELEASES_URL = `https://github.com/${GAME.repo}/releases/latest`
+

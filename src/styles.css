@@ -38,3 +38,4 @@ h1 span{display:block;font-size:.3em;letter-spacing:.35em;color:var(--muted);mar
 .footer{text-align:center;padding:2rem 1rem;color:var(--muted);font-size:.85rem;border-top:1px solid var(--high)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 @media (max-width:520px){.nav nav{gap:.8rem;font-size:.9rem}}
+.card__icon{color:var(--accent);line-height:0;margin-bottom:.5rem}
