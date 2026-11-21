@@ -39,3 +39,8 @@ h1 span{display:block;font-size:.3em;letter-spacing:.35em;color:var(--muted);mar
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 @media (max-width:520px){.nav nav{gap:.8rem;font-size:.9rem}}
 .card__icon{color:var(--accent);line-height:0;margin-bottom:.5rem}
+
+html{scroll-padding-top:4.5rem}
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .7s ease var(--d,0ms),transform .7s cubic-bezier(.2,.7,.2,1) var(--d,0ms)}
+.reveal.is-visible{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}

@@ -23,6 +23,25 @@ export default function App() {
   const [dl, setDl] = useState({ version: GAME.version, fallback: RELEASES_URL })
   useEffect(() => { fetchDownloads().then(setDl) }, [])
 
+  // Fade-up saat elemen masuk viewport.
+  useEffect(() => {
+    const els = document.querySelectorAll(
+      '.hero > *, .section > *, .cards > *, .grid > *, .chapters > li'
+    )
+    if (!('IntersectionObserver' in window)) return
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) { e.target.classList.add('is-visible'); io.unobserve(e.target) }
+      })
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' })
+    els.forEach((el, i) => {
+      el.classList.add('reveal')
+      el.style.setProperty('--d', `${(i % 4) * 90}ms`)
+      io.observe(el)
+    })
+    return () => io.disconnect()
+  }, [])
+
   const supported = os === 'windows' || os === 'android'
   const order = os === 'android' ? ['android', 'windows'] : ['windows', 'android']
 
