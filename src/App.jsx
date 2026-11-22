@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import FeatherIcon from './components/FeatherIcon'
 import DownloadCard from './components/DownloadCard'
+import DownloadModal from './components/DownloadModal'
 import { detectOS } from './lib/detectOS'
 import { fetchDownloads } from './lib/releases'
-import { GAME, RELEASES_URL } from './config'
+import { GAME, RELEASES_URL, WEB_PLAY_URL } from './config'
 
 const FEATURES = [
   ['eye', 'AI Lampor', 'Makhluk yang memburu Anda menembus gelap, dengan sistem kewarasan yang terus tergerus.'],
@@ -21,7 +22,19 @@ const OS_NAMES = { ios: 'iOS', mac: 'macOS', linux: 'Linux', unknown: 'perangkat
 export default function App() {
   const os = useMemo(detectOS, [])
   const [dl, setDl] = useState({ version: GAME.version, fallback: RELEASES_URL })
+  const [activePlatform, setActivePlatform] = useState(null)
+  const downloadTriggerRef = useRef(null)
+
   useEffect(() => { fetchDownloads().then(setDl) }, [])
+
+  const handleDownload = (platform, triggerEl) => {
+    downloadTriggerRef.current = triggerEl
+    setActivePlatform(platform)
+  }
+
+  const handleCloseModal = () => {
+    setActivePlatform(null)
+  }
 
   // Fade-up saat elemen masuk viewport.
   useEffect(() => {
@@ -79,9 +92,15 @@ export default function App() {
           <div className="cards">
             {order.map((k) => (
               <DownloadCard key={k} platform={k} data={dl[k]} fallback={dl.fallback}
-                version={dl.version} detected={os === k} />
+                version={dl.version} detected={os === k} onDownload={handleDownload} />
             ))}
           </div>
+          <p className="web-play">
+            Atau mainkan dengan browser anda :{' '}
+            <a href={WEB_PLAY_URL} target="_blank" rel="noopener noreferrer">
+              {WEB_PLAY_URL}
+            </a>
+          </p>
           <p className="small">Semua rilis: <a href={RELEASES_URL} target="_blank" rel="noreferrer">GitHub Releases</a></p>
         </section>
 
@@ -107,6 +126,15 @@ export default function App() {
       <footer className="footer">
         <p>© {new Date().getFullYear()} {GAME.developer} · {GAME.name} · Lisensi MIT</p>
       </footer>
+
+      <DownloadModal
+        platform={activePlatform}
+        data={activePlatform ? dl[activePlatform] : null}
+        fallback={dl.fallback}
+        version={dl.version}
+        onClose={handleCloseModal}
+        returnFocusTo={downloadTriggerRef}
+      />
     </>
   )
 }

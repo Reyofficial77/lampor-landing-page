@@ -3,9 +3,12 @@ import { PLATFORMS } from '../config'
 
 import FeatherIcon from './FeatherIcon'
 
-export default function DownloadCard({ platform, data, fallback, version, detected }) {
+export default function DownloadCard({ platform, data, fallback, version, detected, onDownload }) {
   const p = PLATFORMS[platform]
   const href = data?.url || fallback
+  const handleClick = (e) => {
+    onDownload?.(platform, e.currentTarget)
+  }
   return (
     <article className={`card${detected ? ' card--detected' : ''}`}>
       {detected && <span className="badge">Perangkat Anda</span>}
@@ -15,7 +18,14 @@ export default function DownloadCard({ platform, data, fallback, version, detect
       <p className="card__meta">
         Versi {version}{data?.size ? ` · ${fmtSize(data.size)}` : ''}
       </p>
-      <a className="btn" href={href} {...(data?.url ? { download: '' } : { target: '_blank', rel: 'noreferrer' })}>
+      <a
+        className="btn"
+        href={href}
+        onClick={handleClick}
+        target="_blank"
+        rel="noopener noreferrer"
+        {...(data?.url ? { download: '' } : {})}
+      >
         Unduh untuk {p.label}
       </a>
     </article>

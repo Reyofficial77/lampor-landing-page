@@ -36,4 +36,6 @@ export const PLATFORMS = {
 }
 
 export const RELEASES_URL = `https://github.com/${GAME.repo}/releases/latest`
+export const DONATION_URL = 'https://saweria.co/lordreyid'
+export const WEB_PLAY_URL = 'https://lampor.vercel.app'
 

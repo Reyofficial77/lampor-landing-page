@@ -34,6 +34,12 @@ const PATHS = {
       <line x1="17" y1="16" x2="23" y2="16" />
     </>
   ),
+  x: (
+    <>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </>
+  ),
 }
 
 export default function FeatherIcon({ name, size = 24 }) {
