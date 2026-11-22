@@ -98,7 +98,7 @@ export default function App() {
           <p className="web-play">
             Atau mainkan dengan browser anda :{' '}
             <a href={WEB_PLAY_URL} target="_blank" rel="noopener noreferrer">
-              {WEB_PLAY_URL}
+              Website Game LAMPOR
             </a>
           </p>
           <p className="small">Semua rilis: <a href={RELEASES_URL} target="_blank" rel="noreferrer">GitHub Releases</a></p>
