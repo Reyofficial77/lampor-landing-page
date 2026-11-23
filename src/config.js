@@ -1,6 +1,6 @@
 export const GAME = {
   name: 'LAMPOR: Malam Jahanam',
-  version: '1.2.6',
+  version: '1.3.0',
   developer: 'AstraDev',
   repo: 'Reyofficial77/lampor',
 }
@@ -11,8 +11,8 @@ export const GAME = {
 // deteksi otomatis rilis terbaru dari GitHub.
 // ============================================================
 export const DOWNLOAD_LINKS = {
-  windows: '', // contoh: 'https://github.com/Reyofficial77/lampor/releases/download/v1.2.6/LAMPOR-Windows.zip'
-  android: '', // contoh: 'https://github.com/Reyofficial77/lampor/releases/download/v1.2.6/LAMPOR.apk'
+  windows: '', // contoh: 'https://github.com/Reyofficial77/lampor/releases/download/v1.3.0/LAMPOR-Windows.zip'
+  android: '', // contoh: 'https://github.com/Reyofficial77/lampor/releases/download/v1.3.0/LAMPOR.apk'
 }
 
 // Ganti pola nama file jika aset rilis GitHub Anda berbeda.
@@ -38,4 +38,3 @@ export const PLATFORMS = {
 export const RELEASES_URL = `https://github.com/${GAME.repo}/releases/latest`
 export const DONATION_URL = 'https://saweria.co/lordreyid'
 export const WEB_PLAY_URL = 'https://lampor.vercel.app'
-
