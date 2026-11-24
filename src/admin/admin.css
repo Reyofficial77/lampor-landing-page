@@ -2,10 +2,57 @@
 
 .admin-shell,
 .admin-gate {
+  --bg: #170B0A;
+  --surface: #1D100F;
+  --surface-dim: #120908;
+  --surface-low: #261817;
+  --surface-container: #2A1C1B;
+  --surface-high: #352625;
+  --surface-highest: #41312F;
+  --crimson: #9E1B1B;
+  --crimson-hover: #B82822;
+  --crimson-active: #821414;
+  --accent: #D4433C;
+  --text: #F7DDDA;
+  --muted: #D5BDBB;
+  --outline: #8D706D;
+  --outline-variant: #59413E;
+  --brass: #C99A5B;
+  --sage: #86BA8C;
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-md: 4px;
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
   font-family: 'Proza Libre', system-ui, sans-serif;
+}
+
+.admin-shell h1,
+.admin-shell h2,
+.admin-shell h3,
+.admin-shell h4,
+.admin-gate h1,
+.admin-gate h2,
+.admin-gate h3 {
+  font-family: 'Cinzel', Georgia, serif;
+}
+
+.admin-shell code,
+.admin-shell kbd,
+.admin-shell pre,
+.admin-shell .mono-chip,
+.admin-gate code,
+.admin-gate .mono-chip {
+  font-family: 'Source Code Pro', monospace;
+}
+
+.admin-shell h1,
+.admin-gate h1 {
+  margin: 0;
+  text-shadow: none;
+  animation: none;
+  font-weight: 700;
 }
 
 .hp-field {
