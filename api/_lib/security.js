@@ -147,6 +147,45 @@ export function sanitizeText(value, maxLen = 200) {
   return s.trim().slice(0, maxLen);
 }
 
+export function sanitizeProfileText(value, maxLen = 200, allowNewlines = false) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  let s = String(value);
+  s = s.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  s = s.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+  s = s.replace(/<[^>]*>/g, '');
+  s = s.replace(/[<>"`]/g, '');
+  if (allowNewlines) {
+    s = s.replace(/\r\n?/g, '\n');
+    s = s.replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, ' ');
+    s = s.replace(/\n{3,}/g, '\n\n');
+  } else {
+    s = s.replace(/[\u0000-\u001F\u007F]/g, ' ');
+  }
+  return s.trim().slice(0, maxLen);
+}
+
+export function sanitizeAvatarUrl(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const s = value.trim();
+  if (!s) {
+    return '';
+  }
+  if (/^preset:[a-z0-9_-]{1,24}$/.test(s)) {
+    return s;
+  }
+  if (/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]{16,19500}$/.test(s)) {
+    return s;
+  }
+  return null;
+}
+
 export function sanitizeDeepValue(value, depth = 0) {
   if (depth > 4) {
     return null;
@@ -554,6 +593,9 @@ export function serializePlayerUser(user) {
   return {
     id: user.id,
     username: user.username,
+    displayName: sanitizeProfileText(user.display_name || '', 32, false),
+    bio: sanitizeProfileText(user.bio || '', 200, true),
+    avatarUrl: sanitizeAvatarUrl(user.avatar_url || '') ?? '',
     role: user.role,
     isBanned: Boolean(user.is_banned),
     banReason: sanitizeText(user.ban_reason || '', 240),

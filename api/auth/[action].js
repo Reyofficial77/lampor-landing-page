@@ -13,6 +13,8 @@ import {
   loginPasswordSchema,
   requirePlayerSession,
   runSecurityPreflight,
+  sanitizeAvatarUrl,
+  sanitizeProfileText,
   sanitizeText,
   sendJson,
   serializePlayerUser,
@@ -44,6 +46,12 @@ const syncSchema = z.strictObject({
   redeemedCodes: z.array(z.string().max(40)).max(100).optional(),
   saveSeq: z.number().finite().optional(),
   tutorialCompleted: z.boolean().optional(),
+});
+
+const profileSchema = z.strictObject({
+  displayName: z.string().max(40).optional(),
+  bio: z.string().max(240).optional(),
+  avatarUrl: z.string().max(20000).optional(),
 });
 
 const PLAYER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -325,6 +333,58 @@ export default async function handler(req, res) {
       redeemedCodes: parsed.data.redeemedCodes ?? [],
       saveSeq: parsed.data.saveSeq ?? auth.user.save_seq,
       tutorialCompleted: parsed.data.tutorialCompleted,
+    });
+
+    return sendJson(res, 200, {
+      ok: true,
+      user: serializePlayerUser(updated),
+    });
+  }
+
+  if (action === 'profile') {
+    const pre = await runSecurityPreflight(req, res, db, {
+      rateCategory: 'auth',
+      parseBody: true,
+    });
+    if (pre.handled) return;
+    if (req.method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
+    }
+    const auth = await requirePlayerSession(req, res, db);
+    if (!auth) return;
+
+    const parsed = profileSchema.safeParse(pre.body);
+    if (!parsed.success) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: formatZodError(parsed.error),
+        code: 'VALIDATION_ERROR',
+      });
+    }
+
+    let safeAvatar;
+    if (parsed.data.avatarUrl !== undefined) {
+      safeAvatar = sanitizeAvatarUrl(parsed.data.avatarUrl);
+      if (safeAvatar === null) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'Format atau ukuran foto profil tidak valid (gunakan PNG/JPG/WEBP maks. ~14KB atau preset).',
+          code: 'VALIDATION_ERROR',
+        });
+      }
+    }
+
+    const updated = await db.updateUserProfile({
+      userId: auth.user.id,
+      displayName:
+        parsed.data.displayName !== undefined
+          ? sanitizeProfileText(parsed.data.displayName, 32, false)
+          : undefined,
+      bio:
+        parsed.data.bio !== undefined
+          ? sanitizeProfileText(parsed.data.bio, 200, true)
+          : undefined,
+      avatarUrl: safeAvatar,
     });
 
     return sendJson(res, 200, {

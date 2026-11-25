@@ -914,6 +914,72 @@ test('Admin force-login, CSRF enforcement, user/room/server/redeem/IP security c
   assert.equal(sessionAfterLogout.status, 401);
 });
 
+test('POST /api/auth/profile updates displayName, bio, and avatarUrl while locking username', async () => {
+  const reg = await registerPlayer('ProfilPlayer', 'KunciProfil12', '10.0.2.88');
+  assert.equal(reg.status, 201);
+  const token = reg.json.token;
+
+  const sampleImg = `data:image/jpeg;base64,${Buffer.from('fake-jpeg-avatar-payload-0123456789').toString('base64')}`;
+  const saveRes = await api('/api/auth/profile', {
+    method: 'POST',
+    token,
+    ip: '10.0.2.88',
+    body: {
+      displayName: '<b>Pemburu</b> Malam',
+      bio: '<script>alert(1)</script>Penjaga obor desa.\nSiap ronda!',
+      avatarUrl: sampleImg,
+    },
+  });
+  assert.equal(saveRes.status, 200);
+  assert.equal(saveRes.json.user.username, 'ProfilPlayer');
+  assert.equal(saveRes.json.user.displayName, 'Pemburu Malam');
+  assert.equal(saveRes.json.user.bio, 'Penjaga obor desa.\nSiap ronda!');
+  assert.equal(saveRes.json.user.avatarUrl, sampleImg);
+
+  const presetRes = await api('/api/auth/profile', {
+    method: 'POST',
+    token,
+    ip: '10.0.2.88',
+    body: {
+      avatarUrl: 'preset:keris',
+    },
+  });
+  assert.equal(presetRes.status, 200);
+  assert.equal(presetRes.json.user.avatarUrl, 'preset:keris');
+
+  const meRes = await api('/api/auth/me', { token, ip: '10.0.2.88' });
+  assert.equal(meRes.status, 200);
+  assert.equal(meRes.json.user.displayName, 'Pemburu Malam');
+  assert.equal(meRes.json.user.bio, 'Penjaga obor desa.\nSiap ronda!');
+  assert.equal(meRes.json.user.avatarUrl, 'preset:keris');
+
+  // Username cannot be edited
+  const renameAttempt = await api('/api/auth/profile', {
+    method: 'POST',
+    token,
+    ip: '10.0.2.88',
+    body: { username: 'NamaLain', displayName: 'Tetap' },
+  });
+  assert.equal(renameAttempt.status, 400);
+
+  // Reject unsafe SVG or javascript avatar URLs
+  const svgAttempt = await api('/api/auth/profile', {
+    method: 'POST',
+    token,
+    ip: '10.0.2.88',
+    body: { avatarUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=' },
+  });
+  assert.equal(svgAttempt.status, 400);
+
+  const jsAttempt = await api('/api/auth/profile', {
+    method: 'POST',
+    token,
+    ip: '10.0.2.88',
+    body: { avatarUrl: 'javascript:alert(1)' },
+  });
+  assert.equal(jsAttempt.status, 400);
+});
+
 test('Sliding-window rate limiter enforces auth request limit', async () => {
   const floodIp = '198.51.100.99';
   let hit429 = false;

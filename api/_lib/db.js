@@ -4,7 +4,9 @@ import {
   hashPassword,
   normalizeItemStash,
   normalizeRedeemedCodes,
+  sanitizeAvatarUrl,
   sanitizeDeepValue,
+  sanitizeProfileText,
   sanitizeText,
 } from './security.js';
 
@@ -122,6 +124,9 @@ function normalizeUserRow(row) {
   if (!row) return null;
   return {
     ...row,
+    display_name: row.display_name || '',
+    bio: row.bio || '',
+    avatar_url: row.avatar_url || '',
     coins: Number(row.coins ?? 0),
     total_wins: Number(row.total_wins ?? 0),
     extra_lives: Number(row.extra_lives ?? 0),
@@ -171,6 +176,9 @@ function seedMemoryDefaults() {
         id,
         username: adminUser,
         username_lower: lower,
+        display_name: '',
+        bio: '',
+        avatar_url: '',
         password_hash: hashPassword(adminPass),
         role: 'admin',
         is_banned: false,
@@ -220,6 +228,9 @@ async function runNeonSchemaInit() {
       id UUID PRIMARY KEY,
       username TEXT NOT NULL,
       username_lower TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL DEFAULT '',
+      bio TEXT NOT NULL DEFAULT '',
+      avatar_url TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'player' CHECK (role IN ('player', 'admin')),
       is_banned BOOLEAN NOT NULL DEFAULT FALSE,
@@ -239,6 +250,9 @@ async function runNeonSchemaInit() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`;
   await sql`CREATE INDEX IF NOT EXISTS idx_users_role ON users (role)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_users_banned ON users (is_banned)`;
 
@@ -834,6 +848,9 @@ export async function createUser({
       id,
       username: cleanUsername,
       username_lower: lower,
+      display_name: '',
+      bio: '',
+      avatar_url: '',
       password_hash: passwordHash,
       role,
       is_banned: false,
@@ -1000,6 +1017,52 @@ export async function syncUserProfile({
       redeemed_codes = ${JSON.stringify(mergedCodes)}::jsonb,
       save_seq = ${nextSeq},
       tutorial_completed = ${nextTutorial},
+      updated_at = NOW()
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return normalizeUserRow(rows[0]);
+}
+
+export async function updateUserProfile({
+  userId,
+  displayName,
+  bio,
+  avatarUrl,
+}) {
+  await ensureSchema();
+  const current = await findUserById(userId);
+  if (!current) return null;
+
+  const nextDisplayName =
+    displayName !== undefined
+      ? sanitizeProfileText(displayName, 32, false)
+      : (current.display_name || '');
+  const nextBio =
+    bio !== undefined
+      ? sanitizeProfileText(bio, 200, true)
+      : (current.bio || '');
+  const nextAvatarUrl =
+    avatarUrl !== undefined
+      ? (sanitizeAvatarUrl(avatarUrl) ?? (current.avatar_url || ''))
+      : (current.avatar_url || '');
+
+  if (isMemoryMode()) {
+    const user = mem.users.get(userId);
+    if (!user) return null;
+    user.display_name = nextDisplayName;
+    user.bio = nextBio;
+    user.avatar_url = nextAvatarUrl;
+    user.updated_at = new Date();
+    return normalizeUserRow(user);
+  }
+
+  const sql = getSql();
+  const rows = await sql`
+    UPDATE users SET
+      display_name = ${nextDisplayName},
+      bio = ${nextBio},
+      avatar_url = ${nextAvatarUrl},
       updated_at = NOW()
     WHERE id = ${userId}
     RETURNING *
