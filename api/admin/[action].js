@@ -41,7 +41,7 @@ const adminLoginSchema = z.strictObject({
 });
 
 const usersActionSchema = z.strictObject({
-  action: z.enum(['create', 'update', 'ban', 'unban', 'reset_password', 'force_logout', 'delete']),
+  action: z.enum(['create', 'update', 'ban', 'unban', 'verify', 'unverify', 'reset_password', 'force_logout', 'delete']),
   userId: z.string().uuid().optional(),
   username: usernameSchema.optional(),
   password: z.string().max(72).optional(),
@@ -49,6 +49,7 @@ const usersActionSchema = z.strictObject({
   totalWins: z.number().finite().optional(),
   extraLives: z.number().finite().optional(),
   role: z.enum(['player', 'admin']).optional(),
+  isVerified: z.boolean().optional(),
   reason: z.string().max(300).optional(),
 });
 
@@ -416,6 +417,7 @@ export default async function handler(req, res) {
         totalWins: data.totalWins,
         extraLives: data.extraLives,
         role: data.role,
+        isVerified: data.isVerified,
       });
       await db.addAuditLog({
         adminUserId: auth.user.id,
@@ -429,7 +431,25 @@ export default async function handler(req, res) {
           totalWins: updated.total_wins,
           extraLives: updated.extra_lives,
           role: updated.role,
+          isVerified: Boolean(updated.is_verified),
         },
+        ipAddress: pre.ip,
+      });
+      return sendJson(res, 200, { ok: true, user: serializeAdminUserRow(updated) });
+    }
+
+    if (data.action === 'verify' || data.action === 'unverify') {
+      const nextVerified = data.action === 'verify';
+      const updated = await db.adminUpdateUser(target.id, {
+        isVerified: nextVerified,
+      });
+      await db.addAuditLog({
+        adminUserId: auth.user.id,
+        adminUsername: auth.user.username,
+        action: nextVerified ? 'verify_user' : 'unverify_user',
+        targetType: 'user',
+        targetId: target.id,
+        details: { username: target.username, isVerified: nextVerified },
         ipAddress: pre.ip,
       });
       return sendJson(res, 200, { ok: true, user: serializeAdminUserRow(updated) });

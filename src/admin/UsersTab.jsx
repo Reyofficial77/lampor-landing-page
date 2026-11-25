@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import VerifiedBadge from './VerifiedBadge'
 import {
   ApiError,
   fetchUsers,
@@ -112,6 +113,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
         totalWins: user.totalWins,
         extraLives: user.extraLives,
         role: user.role || 'player',
+        isVerified: Boolean(user.isVerified),
       })
     } else if (type === 'ban') {
       setModalForm({ reason: '' })
@@ -197,6 +199,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
         totalWins,
         extraLives,
         role: modalForm.role === 'admin' ? 'admin' : 'player',
+        isVerified: Boolean(modalForm.isVerified),
       }
       successMsg = `Data akun ${modal.user.username} berhasil diperbarui.`
     } else if (modal.type === 'ban') {
@@ -271,6 +274,27 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const hasFilters = Boolean(appliedSearch || statusFilter !== 'all')
 
+  const handleToggleVerified = async (user) => {
+    if (!user?.id || submitting) return
+    const nextAction = user.isVerified ? 'unverify' : 'verify'
+    try {
+      await postUsersAction({ action: nextAction, userId: user.id })
+      onNotify(
+        'success',
+        user.isVerified
+          ? `Lencana verifikasi ${user.username} telah dicabut.`
+          : `Akun ${user.username} kini terverifikasi.`
+      )
+      await loadUsers(true)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onUnauthorized(err.message)
+        return
+      }
+      onNotify('error', err.message || 'Gagal mengubah status verifikasi akun.')
+    }
+  }
+
   return (
     <>
       <section className="admin-panel" aria-labelledby="users-toolbar-heading">
@@ -316,6 +340,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
             >
               <option value="all">Semua Akun</option>
               <option value="active">Aktif</option>
+              <option value="verified">Terverifikasi</option>
               <option value="banned">Diblokir (Ban)</option>
               <option value="locked">Terkunci Lockout</option>
               <option value="admin">Administrator</option>
@@ -395,7 +420,8 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     <tr key={u.id || u.username}>
                       <td>
                         <div>
-                          <strong>{u.username}</strong>{' '}
+                          <strong>{u.username}</strong>
+                          {u.isVerified && <VerifiedBadge />}{' '}
                           <span
                             className={`admin-tag ${
                               u.role === 'admin' ? 'admin-tag--brass' : ''
@@ -439,6 +465,13 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                             onClick={(e) => openActionModal('update', u, e.currentTarget)}
                           >
                             Edit
+                          </button>
+                          <button
+                            type="button"
+                            className={`admin-btn admin-btn--sm${u.isVerified ? ' admin-btn--primary' : ''}`}
+                            onClick={() => handleToggleVerified(u)}
+                          >
+                            {u.isVerified ? 'Cabut Centang' : 'Verifikasi'}
                           </button>
                           {u.isBanned ? (
                             <button
@@ -663,6 +696,15 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     </select>
                   </div>
                 </div>
+                <label className="admin-checkbox-row" htmlFor="modal-upd-verified">
+                  <input
+                    id="modal-upd-verified"
+                    type="checkbox"
+                    checked={Boolean(modalForm.isVerified)}
+                    onChange={(e) => setModalForm({ ...modalForm, isVerified: e.target.checked })}
+                  />
+                  <span>Akun Terverifikasi (Lencana Centang Biru)</span>
+                </label>
               </>
             )}
 

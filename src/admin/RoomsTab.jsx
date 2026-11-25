@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import VerifiedBadge from './VerifiedBadge'
 import {
   ApiError,
   fetchRooms,
@@ -264,8 +265,9 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     </span>
                   </div>
                   <p className="admin-field__hint">
-                    Host: {room.hostUsername || room.hostUserId || 'Tidak diketahui'} | Aktivitas
-                    terakhir: {formatTimestamp(room.lastActivityAt)}
+                    Host: {room.hostUsername || room.hostUserId || 'Tidak diketahui'}
+                    {room.hostIsVerified && <VerifiedBadge size={14} />} | Aktivitas terakhir:{' '}
+                    {formatTimestamp(room.lastActivityAt)}
                   </p>
                   {room.announcement && (
                     <p className="admin-field__hint">Pengumuman room: {room.announcement}</p>
@@ -297,7 +299,8 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                   room.players.map((p) => (
                     <div className="room-player-row" key={p.userId || p.username}>
                       <div>
-                        <strong>{p.username}</strong>{' '}
+                        <strong>{p.username}</strong>
+                        {p.isVerified && <VerifiedBadge size={14} />}{' '}
                         {p.isHost && <span className="admin-tag admin-tag--brass">HOST</span>}{' '}
                         <span className={`admin-tag ${p.isReady ? 'admin-tag--sage' : ''}`}>
                           {p.isReady ? 'SIAP' : 'MENUNGGU'}

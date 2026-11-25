@@ -127,6 +127,7 @@ function normalizeUserRow(row) {
     display_name: row.display_name || '',
     bio: row.bio || '',
     avatar_url: row.avatar_url || '',
+    is_verified: Boolean(row.is_verified),
     coins: Number(row.coins ?? 0),
     total_wins: Number(row.total_wins ?? 0),
     extra_lives: Number(row.extra_lives ?? 0),
@@ -181,6 +182,7 @@ function seedMemoryDefaults() {
         avatar_url: '',
         password_hash: hashPassword(adminPass),
         role: 'admin',
+        is_verified: true,
         is_banned: false,
         ban_reason: '',
         coins: 0,
@@ -233,6 +235,7 @@ async function runNeonSchemaInit() {
       avatar_url TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'player' CHECK (role IN ('player', 'admin')),
+      is_verified BOOLEAN NOT NULL DEFAULT FALSE,
       is_banned BOOLEAN NOT NULL DEFAULT FALSE,
       ban_reason TEXT NOT NULL DEFAULT '',
       coins BIGINT NOT NULL DEFAULT 0 CHECK (coins >= 0 AND coins <= 999999999),
@@ -253,6 +256,7 @@ async function runNeonSchemaInit() {
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE`;
   await sql`CREATE INDEX IF NOT EXISTS idx_users_role ON users (role)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_users_banned ON users (is_banned)`;
 
@@ -853,6 +857,7 @@ export async function createUser({
       avatar_url: '',
       password_hash: passwordHash,
       role,
+      is_verified: false,
       is_banned: false,
       ban_reason: '',
       coins: clampedCoins,
@@ -1217,6 +1222,8 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
       list = list.filter((u) => !u.is_banned);
     } else if (status === 'banned') {
       list = list.filter((u) => u.is_banned);
+    } else if (status === 'verified') {
+      list = list.filter((u) => u.is_verified);
     } else if (status === 'admin') {
       list = list.filter((u) => u.role === 'admin');
     } else if (status === 'locked') {
@@ -1240,6 +1247,7 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
         ${status === 'all'}
         OR (${status === 'active'} AND is_banned = FALSE)
         OR (${status === 'banned'} AND is_banned = TRUE)
+        OR (${status === 'verified'} AND is_verified = TRUE)
         OR (${status === 'admin'} AND role = 'admin')
         OR (${status === 'locked'} AND locked_until IS NOT NULL AND locked_until > NOW())
       )
@@ -1251,6 +1259,7 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
         ${status === 'all'}
         OR (${status === 'active'} AND is_banned = FALSE)
         OR (${status === 'banned'} AND is_banned = TRUE)
+        OR (${status === 'verified'} AND is_verified = TRUE)
         OR (${status === 'admin'} AND role = 'admin')
         OR (${status === 'locked'} AND locked_until IS NOT NULL AND locked_until > NOW())
       )
@@ -1294,6 +1303,7 @@ export async function adminUpdateUser(userId, patch) {
         ? Math.min(5, Math.max(0, Math.trunc(Number(patch.extraLives) || 0)))
         : current.extra_lives,
     role: patch.role !== undefined ? patch.role : current.role,
+    is_verified: patch.isVerified !== undefined ? Boolean(patch.isVerified) : Boolean(current.is_verified),
     is_banned: patch.isBanned !== undefined ? Boolean(patch.isBanned) : current.is_banned,
     ban_reason:
       patch.banReason !== undefined ? sanitizeText(patch.banReason, 240) : current.ban_reason,
@@ -1317,6 +1327,7 @@ export async function adminUpdateUser(userId, patch) {
       total_wins = ${next.total_wins},
       extra_lives = ${next.extra_lives},
       role = ${next.role},
+      is_verified = ${next.is_verified},
       is_banned = ${next.is_banned},
       ban_reason = ${next.ban_reason},
       password_hash = ${next.password_hash},
@@ -1716,9 +1727,12 @@ export async function getOverviewStats() {
 function getMemRoomPlayersArray(roomId) {
   const map = mem.roomPlayers.get(roomId);
   if (!map) return [];
-  return Array.from(map.values()).sort(
-    (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime()
-  );
+  return Array.from(map.values())
+    .sort((a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime())
+    .map((p) => ({
+      ...p,
+      is_verified: Boolean(mem.users.get(p.user_id)?.is_verified),
+    }));
 }
 
 async function appendRoomEvent({ roomId, senderUserId = null, senderUsername = '', eventType, payload = {} }) {
@@ -1804,12 +1818,15 @@ export async function getRoomPlayers(roomId) {
   }
   const sql = getSql();
   const rows = await sql`
-    SELECT * FROM room_players
-    WHERE room_id = ${roomId}
-    ORDER BY joined_at ASC
+    SELECT rp.*, COALESCE(u.is_verified, FALSE) AS is_verified
+    FROM room_players rp
+    LEFT JOIN users u ON u.id = rp.user_id
+    WHERE rp.room_id = ${roomId}
+    ORDER BY rp.joined_at ASC
   `;
   return rows.map((p) => ({
     ...p,
+    is_verified: Boolean(p.is_verified),
     player_state: parseJsonField(p.player_state, {}),
   }));
 }

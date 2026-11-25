@@ -1099,6 +1099,56 @@ test('Multilingual profanity filter blocks profane usernames, censors chat, and 
   assert.equal(meAfter.status, 200);
   assert.equal(meAfter.json.user.coins, 99999);
   assert.equal(meAfter.json.user.extraLives, 2);
+  assert.equal(meAfter.json.user.isVerified, false);
+
+  // Admin verifies player -> reflects immediately in /api/auth/me, /api/rooms/list, and /api/rooms/sync
+  const verifyRes = await api('/api/admin/users-action', {
+    method: 'POST',
+    ip: '10.0.8.3',
+    cookies: jar,
+    csrf,
+    body: { action: 'verify', userId: pUserId },
+  });
+  assert.equal(verifyRes.status, 200);
+  assert.equal(verifyRes.json.user.isVerified, true);
+
+  const meVerified = await api('/api/auth/me', { token: pToken, ip: '10.0.8.2' });
+  assert.equal(meVerified.status, 200);
+  assert.equal(meVerified.json.user.isVerified, true);
+
+  const listVerified = await api('/api/rooms/list?mode=sandbox', { token: pToken, ip: '10.0.8.2' });
+  assert.equal(listVerified.status, 200);
+  const foundRoom = listVerified.json.rooms.find((r) => r.id === rId);
+  assert.ok(foundRoom);
+  assert.equal(foundRoom.hostIsVerified, true);
+
+  const syncVerified = await api('/api/rooms/sync', {
+    method: 'POST',
+    token: pToken,
+    ip: '10.0.8.2',
+    body: {
+      roomId: rId,
+      lastEventSeq: chatSync.json.lastEventSeq,
+      events: [{ type: 'chat', payload: { text: 'halo terverifikasi' } }],
+    },
+  });
+  assert.equal(syncVerified.status, 200);
+  assert.equal(syncVerified.json.user.isVerified, true);
+  assert.equal(syncVerified.json.players[0].isVerified, true);
+  const vChat = syncVerified.json.events.find((e) => e.type === 'chat');
+  assert.ok(vChat);
+  assert.equal(vChat.senderIsVerified, true);
+
+  // Unverify works cleanly too
+  const unverifyRes = await api('/api/admin/users-action', {
+    method: 'POST',
+    ip: '10.0.8.3',
+    cookies: jar,
+    csrf,
+    body: { action: 'unverify', userId: pUserId },
+  });
+  assert.equal(unverifyRes.status, 200);
+  assert.equal(unverifyRes.json.user.isVerified, false);
 });
 
 test('Sliding-window rate limiter enforces auth request limit', async () => {

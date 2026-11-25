@@ -42,12 +42,16 @@ async function requestJson(url, options = {}) {
     const csrf = getCsrfToken()
     if (csrf) headers['X-Lampor-CSRF'] = csrf
   }
+  if (method === 'GET') {
+    headers['Cache-Control'] = 'no-cache'
+  }
 
   let res
   try {
     res = await fetch(url, {
       method,
       headers,
+      cache: 'no-store',
       credentials: 'include',
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
@@ -268,6 +272,7 @@ export function normalizeUser(raw = {}) {
     id: raw.id ?? raw.userId ?? raw.user_id ?? '',
     username: raw.username ?? '',
     role: raw.role ?? 'player',
+    isVerified: Boolean(raw.isVerified ?? raw.is_verified ?? false),
     coins: Number(raw.coins ?? 0),
     totalWins: Number(raw.totalWins ?? raw.total_wins ?? 0),
     extraLives: Number(raw.extraLives ?? raw.extra_lives ?? 0),
@@ -298,12 +303,14 @@ export function normalizeRoom(raw = {}) {
     announcement: raw.announcement ?? '',
     hostUserId: raw.hostUserId ?? raw.host_user_id ?? '',
     hostUsername: raw.hostUsername ?? raw.host_username ?? '',
+    hostIsVerified: Boolean(raw.hostIsVerified ?? raw.host_is_verified ?? false),
     lastActivityAt: raw.lastActivityAt ?? raw.last_activity_at ?? raw.updatedAt ?? raw.updated_at ?? null,
     players: players.map((p) => ({
       userId: p.userId ?? p.user_id ?? p.id ?? '',
       username: p.username ?? 'Pemain',
       isHost: Boolean(p.isHost ?? p.is_host ?? false),
       isReady: Boolean(p.isReady ?? p.is_ready ?? false),
+      isVerified: Boolean(p.isVerified ?? p.is_verified ?? false),
       joinedAt: p.joinedAt ?? p.joined_at ?? null,
       lastSeenAt: p.lastSeenAt ?? p.last_seen_at ?? null,
     })),

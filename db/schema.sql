@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_url TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'player' CHECK (role IN ('player', 'admin')),
+  is_verified BOOLEAN NOT NULL DEFAULT FALSE,
   is_banned BOOLEAN NOT NULL DEFAULT FALSE,
   ban_reason TEXT NOT NULL DEFAULT '',
   coins BIGINT NOT NULL DEFAULT 0 CHECK (coins >= 0 AND coins <= 999999999),

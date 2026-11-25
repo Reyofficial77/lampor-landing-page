@@ -405,7 +405,7 @@ export function applySecurityHeaders(res) {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
-  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
 }
 
 export function applyCorsHeaders(req, res, { allowCredentials = false } = {}) {
@@ -654,6 +654,7 @@ export function serializePlayerUser(user) {
     bio: censorProfanity(sanitizeProfileText(user.bio || '', 200, true)),
     avatarUrl: sanitizeAvatarUrl(user.avatar_url || '') ?? '',
     role: user.role,
+    isVerified: Boolean(user.is_verified),
     isBanned: Boolean(user.is_banned),
     banReason: sanitizeText(user.ban_reason || '', 240),
     coins: Math.min(999999999, Math.max(0, Number(user.coins ?? 0))),
@@ -685,6 +686,7 @@ export function serializeRoomPlayer(player) {
     username: censorProfanity(player.username || ''),
     isHost: Boolean(player.is_host),
     isReady: Boolean(player.is_ready),
+    isVerified: Boolean(player.is_verified),
     playerState: sanitizeDeepValue(player.player_state || {}) || {},
     joinedAt: player.joined_at ? new Date(player.joined_at).toISOString() : null,
     lastSeenAt: player.last_seen_at ? new Date(player.last_seen_at).toISOString() : null,
@@ -699,6 +701,7 @@ export function serializeRoom(room, players = [], hostUsername = '') {
     name: censorProfanity(sanitizeText(room.name, 60)),
     hostUserId: room.host_user_id,
     hostUsername: censorProfanity(hostUsername || hostFromPlayers?.username || ''),
+    hostIsVerified: Boolean(hostFromPlayers?.is_verified),
     mode: room.mode,
     status: room.status,
     difficulty: room.difficulty,
@@ -732,6 +735,7 @@ export function serializeRoomEvent(ev) {
     eventType: ev.event_type,
     senderUserId: ev.sender_user_id || null,
     senderUsername: censorProfanity(sanitizeText(ev.sender_username || '', 32)),
+    senderIsVerified: Boolean(payload.senderIsVerified || ev.sender_is_verified),
     payload,
     createdAt: ev.created_at ? new Date(ev.created_at).toISOString() : null,
   };

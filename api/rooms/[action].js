@@ -12,6 +12,7 @@ import {
   sanitizeDeepValue,
   sanitizeText,
   sendJson,
+  serializePlayerUser,
   serializeRoom,
   serializeRoomEvent,
   serializeRoomPlayer,
@@ -481,6 +482,7 @@ export default async function handler(req, res) {
           if (typeof payload.message === 'string') {
             payload.message = censorProfanity(sanitizeText(payload.message, 220));
           }
+          payload.senderIsVerified = Boolean(auth.user.is_verified);
         }
         return { type, payload };
       })
@@ -514,6 +516,7 @@ export default async function handler(req, res) {
 
     return sendJson(res, 200, {
       ok: true,
+      user: serializePlayerUser(auth.user),
       room: serializeRoom(synced.room, synced.players),
       players: synced.players.map(serializeRoomPlayer),
       worldState: sanitizeDeepValue(synced.room.world_state || {}) || {},
