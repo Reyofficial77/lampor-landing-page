@@ -8,7 +8,7 @@ import {
   useDialogController,
 } from './adminApi'
 
-export default function RoomsTab({ refreshTick, onNotify, onUnauthorized }) {
+export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthorized }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [rooms, setRooms] = useState([])
@@ -20,6 +20,7 @@ export default function RoomsTab({ refreshTick, onNotify, onUnauthorized }) {
   const [modalError, setModalError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const returnFocusRef = useRef(null)
+  const inFlightRef = useRef(false)
 
   const closeModal = useCallback(() => {
     setModal(null)
@@ -34,9 +35,13 @@ export default function RoomsTab({ refreshTick, onNotify, onUnauthorized }) {
     returnFocusRef
   )
 
-  const loadRooms = useCallback(async () => {
-    setLoading(true)
-    setError('')
+  const loadRooms = useCallback(async (silent = false) => {
+    if (inFlightRef.current) return
+    inFlightRef.current = true
+    if (!silent) {
+      setLoading(true)
+      setError('')
+    }
     try {
       const res = await fetchRooms()
       const list = Array.isArray(res.rooms) ? res.rooms.map(normalizeRoom) : []
@@ -46,15 +51,25 @@ export default function RoomsTab({ refreshTick, onNotify, onUnauthorized }) {
         onUnauthorized(err.message)
         return
       }
-      setError(err.message || 'Gagal memuat daftar room aktif.')
+      if (!silent) {
+        setError(err.message || 'Gagal memuat daftar room aktif.')
+      }
     } finally {
-      setLoading(false)
+      inFlightRef.current = false
+      if (!silent) {
+        setLoading(false)
+      }
     }
   }, [onUnauthorized])
 
   useEffect(() => {
-    loadRooms()
+    loadRooms(false)
   }, [loadRooms, refreshTick])
+
+  useEffect(() => {
+    if (!autoTick || modal) return
+    loadRooms(true)
+  }, [loadRooms, autoTick, modal])
 
   const openModal = (type, room, player, triggerEl) => {
     returnFocusRef.current = triggerEl

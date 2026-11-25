@@ -914,27 +914,45 @@ test('Admin force-login, CSRF enforcement, user/room/server/redeem/IP security c
   assert.equal(sessionAfterLogout.status, 401);
 });
 
-test('POST /api/auth/profile updates displayName, bio, and avatarUrl while locking username', async () => {
+test('POST /api/auth/profile updates displayName, bio, and avatarUrl while locking username, rewriting avatarFilename, and validating magic bytes', async () => {
   const reg = await registerPlayer('ProfilPlayer', 'KunciProfil12', '10.0.2.88');
   assert.equal(reg.status, 201);
   const token = reg.json.token;
 
-  const sampleImg = `data:image/jpeg;base64,${Buffer.from('fake-jpeg-avatar-payload-0123456789').toString('base64')}`;
+  const validJpegBuf = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    Buffer.from('0010JFIF-valid-jpeg-avatar-payload-0123456789'),
+  ]);
+  const sampleImg = `data:image/jpeg;base64,${validJpegBuf.toString('base64')}`;
   const saveRes = await api('/api/auth/profile', {
     method: 'POST',
     token,
     ip: '10.0.2.88',
     body: {
-      displayName: '<b>Pemburu</b> Malam',
+      displayName: '<b>Pemburu</b> anjing Malam',
       bio: '<script>alert(1)</script>Penjaga obor desa.\nSiap ronda!',
       avatarUrl: sampleImg,
+      avatarFilename: '../../evil_shell.php.jpg',
     },
   });
   assert.equal(saveRes.status, 200);
   assert.equal(saveRes.json.user.username, 'ProfilPlayer');
-  assert.equal(saveRes.json.user.displayName, 'Pemburu Malam');
+  assert.equal(saveRes.json.user.displayName, 'Pemburu *** Malam');
   assert.equal(saveRes.json.user.bio, 'Penjaga obor desa.\nSiap ronda!');
   assert.equal(saveRes.json.user.avatarUrl, sampleImg);
+  assert.match(saveRes.json.avatarFilename, /^avatar_[a-f0-9]{16}\.jpg$/);
+  assert.ok(!saveRes.json.avatarFilename.includes('evil_shell'));
+
+  // Reject spoofed/fake non-image magic bytes claiming image/jpeg
+  const spoofAttempt = await api('/api/auth/profile', {
+    method: 'POST',
+    token,
+    ip: '10.0.2.88',
+    body: {
+      avatarUrl: `data:image/jpeg;base64,${Buffer.from('<?php system($_GET["c"]); ?>0123456789').toString('base64')}`,
+    },
+  });
+  assert.equal(spoofAttempt.status, 400);
 
   const presetRes = await api('/api/auth/profile', {
     method: 'POST',
@@ -949,7 +967,7 @@ test('POST /api/auth/profile updates displayName, bio, and avatarUrl while locki
 
   const meRes = await api('/api/auth/me', { token, ip: '10.0.2.88' });
   assert.equal(meRes.status, 200);
-  assert.equal(meRes.json.user.displayName, 'Pemburu Malam');
+  assert.equal(meRes.json.user.displayName, 'Pemburu *** Malam');
   assert.equal(meRes.json.user.bio, 'Penjaga obor desa.\nSiap ronda!');
   assert.equal(meRes.json.user.avatarUrl, 'preset:keris');
 
@@ -978,6 +996,109 @@ test('POST /api/auth/profile updates displayName, bio, and avatarUrl while locki
     body: { avatarUrl: 'javascript:alert(1)' },
   });
   assert.equal(jsAttempt.status, 400);
+});
+
+test('Multilingual profanity filter blocks profane usernames, censors chat, and admin coin edit persists over stale sync', async () => {
+  const { censorProfanity, containsProfanity } = await import('../api/_lib/profanity.js');
+  assert.equal(censorProfanity('dasar anjing b4ngs4t!'), 'dasar *** ***!');
+  assert.equal(censorProfanity('what the f*ck and fuuuuck'), 'what the *** and ***');
+  assert.equal(censorProfanity('puta mierda cyka blyat くそ 씨발 شرموطة'), '*** *** *** *** *** *** ***');
+  assert.equal(censorProfanity('k.o.n.t.o.l vs classic assassin night malam'), '*** vs classic assassin night malam');
+  assert.equal(containsProfanity('lordreyid'), false);
+
+  // Register blocks profane username
+  const badReg = await registerPlayer('anjing_123', 'PlayerPass123', '10.0.8.1');
+  assert.equal(badReg.status, 400);
+  assert.equal(badReg.json.code, 'PROFANITY_NOT_ALLOWED');
+
+  // Register clean player, sync low coins, then admin edits coins to 99999
+  const playerReg = await registerPlayer('PemainKoin', 'PlayerPass123', '10.0.8.2');
+  assert.equal(playerReg.status, 201);
+  const pToken = playerReg.json.token;
+  const pUserId = playerReg.json.user.id;
+
+  const firstSync = await api('/api/auth/sync', {
+    method: 'POST',
+    token: pToken,
+    ip: '10.0.8.2',
+    body: { coins: 120, totalWins: 1, extraLives: 0, saveSeq: 3 },
+  });
+  assert.equal(firstSync.status, 200);
+  assert.equal(firstSync.json.user.coins, 120);
+
+  // Chat profanity censoring in room sync
+  const rCreated = await api('/api/rooms/create', {
+    method: 'POST',
+    token: pToken,
+    ip: '10.0.8.2',
+    body: {
+      name: 'Desa Bersih',
+      mode: 'sandbox',
+      maxPlayers: 2,
+      difficulty: 'normal',
+      canUseShopItems: true,
+    },
+  });
+  assert.equal(rCreated.status, 201);
+  const rId = rCreated.json.room.id;
+
+  const chatSync = await api('/api/rooms/sync', {
+    method: 'POST',
+    token: pToken,
+    ip: '10.0.8.2',
+    body: {
+      roomId: rId,
+      lastEventSeq: 0,
+      events: [{ type: 'chat', payload: { text: 'halo bangsat f*ck desa aman' } }],
+    },
+  });
+  assert.equal(chatSync.status, 200);
+  const chatEv = chatSync.json.events.find((e) => e.type === 'chat');
+  assert.ok(chatEv);
+  assert.equal(chatEv.payload.text, 'halo *** *** desa aman');
+
+  // Admin login & edit coins to 99999
+  const chAdmin = await solvePow('10.0.8.3');
+  const adminLog = await api('/api/admin/login', {
+    method: 'POST',
+    ip: '10.0.8.3',
+    body: {
+      username: 'admin_lampor',
+      password: 'AdminPassword123',
+      challenge: chAdmin,
+      website: '',
+    },
+  });
+  assert.equal(adminLog.status, 200);
+  const jar = parseSetCookieJar(adminLog.setCookies);
+  const csrf = adminLog.json.csrfToken;
+
+  const coinEdit = await api('/api/admin/users-action', {
+    method: 'POST',
+    ip: '10.0.8.3',
+    cookies: jar,
+    csrf,
+    body: { action: 'update', userId: pUserId, coins: 99999, totalWins: 1, extraLives: 2 },
+  });
+  assert.equal(coinEdit.status, 200);
+  assert.equal(coinEdit.json.user.coins, 99999);
+  assert.ok(coinEdit.json.user.saveSeq >= 103);
+
+  // Stale player sync (with next sequence 4 < server saveSeq 103) must NOT revert 99999!
+  const stalePlayerSync = await api('/api/auth/sync', {
+    method: 'POST',
+    token: pToken,
+    ip: '10.0.8.2',
+    body: { coins: 120, totalWins: 1, extraLives: 0, saveSeq: 4 },
+  });
+  assert.equal(stalePlayerSync.status, 200);
+  assert.equal(stalePlayerSync.json.user.coins, 99999);
+
+  // Player /me returns 99999
+  const meAfter = await api('/api/auth/me', { token: pToken, ip: '10.0.8.2' });
+  assert.equal(meAfter.status, 200);
+  assert.equal(meAfter.json.user.coins, 99999);
+  assert.equal(meAfter.json.user.extraLives, 2);
 });
 
 test('Sliding-window rate limiter enforces auth request limit', async () => {

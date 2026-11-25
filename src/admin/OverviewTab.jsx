@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   fetchOverview,
@@ -8,7 +8,7 @@ import {
   saveServerSettings,
 } from './adminApi'
 
-export default function OverviewTab({ refreshTick, onNotify, onUnauthorized }) {
+export default function OverviewTab({ refreshTick, autoTick, onNotify, onUnauthorized }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [stats, setStats] = useState(null)
@@ -16,37 +16,56 @@ export default function OverviewTab({ refreshTick, onNotify, onUnauthorized }) {
   const [form, setForm] = useState(() => normalizeServerSettings({}))
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
+  const inFlightRef = useRef(false)
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
-    setError('')
+  const loadData = useCallback(async (silent = false) => {
+    if (inFlightRef.current) return
+    inFlightRef.current = true
+    if (!silent) {
+      setLoading(true)
+      setError('')
+    }
     try {
       const overviewRes = await fetchOverview()
       setStats(overviewRes.stats || null)
       let settingsRaw = overviewRes.serverSettings
-      if (!settingsRaw) {
+      if (!settingsRaw && !silent) {
         const srvRes = await fetchServerSettings()
         settingsRaw = srvRes.serverSettings || srvRes.settings || srvRes
       }
-      setForm(normalizeServerSettings(settingsRaw))
-      setMeta({
-        updatedAt: settingsRaw?.updatedAt || settingsRaw?.updated_at || null,
-        updatedBy: settingsRaw?.updatedBy || settingsRaw?.updated_by || '',
-      })
+      if (!silent && settingsRaw) {
+        setForm(normalizeServerSettings(settingsRaw))
+      }
+      if (settingsRaw) {
+        setMeta({
+          updatedAt: settingsRaw?.updatedAt || settingsRaw?.updated_at || null,
+          updatedBy: settingsRaw?.updatedBy || settingsRaw?.updated_by || '',
+        })
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         onUnauthorized(err.message)
         return
       }
-      setError(err.message || 'Gagal memuat ringkasan server.')
+      if (!silent) {
+        setError(err.message || 'Gagal memuat ringkasan server.')
+      }
     } finally {
-      setLoading(false)
+      inFlightRef.current = false
+      if (!silent) {
+        setLoading(false)
+      }
     }
   }, [onUnauthorized])
 
   useEffect(() => {
-    loadData()
+    loadData(false)
   }, [loadData, refreshTick])
+
+  useEffect(() => {
+    if (!autoTick) return
+    loadData(true)
+  }, [loadData, autoTick])
 
   const handleSaveSettings = async (e) => {
     e.preventDefault()

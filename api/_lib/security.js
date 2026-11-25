@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import net from 'node:net';
 import { z } from 'zod';
+import { censorProfanity } from './profanity.js';
 
 export const MAX_BODY_BYTES = 32 * 1024;
 export const ADMIN_SESSION_COOKIE = 'lampor_admin_session';
@@ -166,6 +167,51 @@ export function sanitizeProfileText(value, maxLen = 200, allowNewlines = false) 
   return s.trim().slice(0, maxLen);
 }
 
+function detectAvatarImageMime(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 16 || buf.length > 16384) {
+    return null;
+  }
+  // JPEG: FF D8 FF
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return { mime: 'image/jpeg', ext: 'jpg' };
+  }
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  ) {
+    return { mime: 'image/png', ext: 'png' };
+  }
+  // WEBP: RIFF....WEBP
+  if (
+    buf.length >= 16 &&
+    buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buf.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    return { mime: 'image/webp', ext: 'webp' };
+  }
+  return null;
+}
+
+export function detectAvatarExtFromDataUrl(value) {
+  if (typeof value !== 'string') return '';
+  if (value.startsWith('data:image/jpeg;base64,')) return 'jpg';
+  if (value.startsWith('data:image/png;base64,')) return 'png';
+  if (value.startsWith('data:image/webp;base64,')) return 'webp';
+  return '';
+}
+
+export function rewriteAvatarFilename(_rawFilename = '', mimeExt = 'jpg') {
+  const safeExt = ['jpg', 'png', 'webp'].includes(mimeExt) ? mimeExt : 'jpg';
+  return `avatar_${crypto.randomBytes(8).toString('hex')}.${safeExt}`;
+}
+
 export function sanitizeAvatarUrl(value) {
   if (value === null || value === undefined) {
     return '';
@@ -180,10 +226,21 @@ export function sanitizeAvatarUrl(value) {
   if (/^preset:[a-z0-9_-]{1,24}$/.test(s)) {
     return s;
   }
-  if (/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]{16,19500}$/.test(s)) {
-    return s;
+  const match = /^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]{16,19500})$/.exec(s);
+  if (!match) {
+    return null;
   }
-  return null;
+  let buf;
+  try {
+    buf = Buffer.from(match[2], 'base64');
+  } catch {
+    return null;
+  }
+  const detected = detectAvatarImageMime(buf);
+  if (!detected) {
+    return null;
+  }
+  return `data:${detected.mime};base64,${buf.toString('base64')}`;
 }
 
 export function sanitizeDeepValue(value, depth = 0) {
@@ -592,9 +649,9 @@ export function normalizeRedeemedCodes(rawCodes) {
 export function serializePlayerUser(user) {
   return {
     id: user.id,
-    username: user.username,
-    displayName: sanitizeProfileText(user.display_name || '', 32, false),
-    bio: sanitizeProfileText(user.bio || '', 200, true),
+    username: censorProfanity(user.username || ''),
+    displayName: censorProfanity(sanitizeProfileText(user.display_name || '', 32, false)),
+    bio: censorProfanity(sanitizeProfileText(user.bio || '', 200, true)),
     avatarUrl: sanitizeAvatarUrl(user.avatar_url || '') ?? '',
     role: user.role,
     isBanned: Boolean(user.is_banned),
@@ -614,6 +671,7 @@ export function serializePlayerUser(user) {
 export function serializeAdminUserRow(user) {
   return {
     ...serializePlayerUser(user),
+    username: user.username,
     failedLoginAttempts: Number(user.failed_login_attempts ?? 0),
     lockedUntil: user.locked_until ? new Date(user.locked_until).toISOString() : null,
     lastLoginIp: user.last_login_ip || '',
@@ -624,7 +682,7 @@ export function serializeAdminUserRow(user) {
 export function serializeRoomPlayer(player) {
   return {
     userId: player.user_id,
-    username: player.username,
+    username: censorProfanity(player.username || ''),
     isHost: Boolean(player.is_host),
     isReady: Boolean(player.is_ready),
     playerState: sanitizeDeepValue(player.player_state || {}) || {},
@@ -638,9 +696,9 @@ export function serializeRoom(room, players = [], hostUsername = '') {
   return {
     id: room.id,
     roomCode: room.room_code,
-    name: sanitizeText(room.name, 60),
+    name: censorProfanity(sanitizeText(room.name, 60)),
     hostUserId: room.host_user_id,
-    hostUsername: hostUsername || hostFromPlayers?.username || '',
+    hostUsername: censorProfanity(hostUsername || hostFromPlayers?.username || ''),
     mode: room.mode,
     status: room.status,
     difficulty: room.difficulty,
@@ -650,7 +708,7 @@ export function serializeRoom(room, players = [], hostUsername = '') {
     canUseShopItems: Boolean(room.can_use_shop_items),
     allowLateJoin: Boolean(room.allow_late_join),
     settings: sanitizeDeepValue(room.settings || {}) || {},
-    announcement: sanitizeText(room.announcement || '', 240),
+    announcement: censorProfanity(sanitizeText(room.announcement || '', 240)),
     lastEventSeq: Number(room.last_event_seq ?? 0),
     createdAt: room.created_at ? new Date(room.created_at).toISOString() : null,
     lastActivityAt: room.last_activity_at ? new Date(room.last_activity_at).toISOString() : null,
@@ -658,14 +716,23 @@ export function serializeRoom(room, players = [], hostUsername = '') {
 }
 
 export function serializeRoomEvent(ev) {
+  const payload = sanitizeDeepValue(ev.payload || {}) || {};
+  if (ev.event_type === 'chat') {
+    if (typeof payload.text === 'string') {
+      payload.text = censorProfanity(payload.text);
+    }
+    if (typeof payload.message === 'string') {
+      payload.message = censorProfanity(payload.message);
+    }
+  }
   return {
     id: ev.id,
     seq: Number(ev.seq),
     type: ev.event_type,
     eventType: ev.event_type,
     senderUserId: ev.sender_user_id || null,
-    senderUsername: sanitizeText(ev.sender_username || '', 32),
-    payload: sanitizeDeepValue(ev.payload || {}) || {},
+    senderUsername: censorProfanity(sanitizeText(ev.sender_username || '', 32)),
+    payload,
     createdAt: ev.created_at ? new Date(ev.created_at).toISOString() : null,
   };
 }
@@ -801,9 +868,9 @@ export async function runSecurityPreflight(
     if (rateCategory === 'auth') {
       effectiveLimit = Number(process.env.LAMPOR_RATE_LIMIT_AUTH || 40);
     } else if (rateCategory === 'sync') {
-      effectiveLimit = Number(process.env.LAMPOR_RATE_LIMIT_SYNC || 240);
+      effectiveLimit = Number(process.env.LAMPOR_RATE_LIMIT_SYNC || 420);
     } else {
-      effectiveLimit = Number(process.env.LAMPOR_RATE_LIMIT_GENERAL || 120);
+      effectiveLimit = Number(process.env.LAMPOR_RATE_LIMIT_GENERAL || 300);
     }
   }
 

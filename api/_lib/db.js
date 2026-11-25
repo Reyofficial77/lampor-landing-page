@@ -1271,6 +1271,15 @@ export async function adminUpdateUser(userId, patch) {
   const current = await findUserById(userId);
   if (!current) return null;
 
+  const modifiesProgress =
+    patch.coins !== undefined ||
+    patch.totalWins !== undefined ||
+    patch.extraLives !== undefined ||
+    patch.itemStash !== undefined;
+  const nextSaveSeq = modifiesProgress
+    ? Number(current.save_seq ?? 0) + 100
+    : Number(current.save_seq ?? 0);
+
   const next = {
     coins:
       patch.coins !== undefined
@@ -1291,6 +1300,7 @@ export async function adminUpdateUser(userId, patch) {
     password_hash: patch.passwordHash !== undefined ? patch.passwordHash : current.password_hash,
     failed_login_attempts: patch.clearLockout ? 0 : current.failed_login_attempts,
     locked_until: patch.clearLockout ? null : current.locked_until,
+    save_seq: nextSaveSeq,
   };
 
   if (isMemoryMode()) {
@@ -1312,6 +1322,7 @@ export async function adminUpdateUser(userId, patch) {
       password_hash = ${next.password_hash},
       failed_login_attempts = ${next.failed_login_attempts},
       locked_until = ${lockVal}::timestamptz,
+      save_seq = ${next.save_seq},
       updated_at = NOW()
     WHERE id = ${userId}
     RETURNING *
@@ -2232,7 +2243,7 @@ export async function syncRoom({
   events = [],
 }) {
   await ensureSchema();
-  const peerCutoffMs = Date.now() - 25_000;
+  const peerCutoffMs = Date.now() - 90_000;
 
   if (isMemoryMode()) {
     const room = mem.rooms.get(roomId);
@@ -2241,11 +2252,14 @@ export async function syncRoom({
     if (!room || !selfPlayer) return null;
 
     selfPlayer.last_seen_at = new Date();
+    if (room.host_user_id === userId) {
+      selfPlayer.is_host = true;
+    }
     if (playerState !== undefined) {
       selfPlayer.player_state = sanitizeDeepValue(playerState) || {};
     }
 
-    // Drop unseen peers >25s
+    // Drop unseen peers >90s
     const dropped = [];
     for (const [pid, p] of playersMap.entries()) {
       if (pid !== userId && new Date(p.last_seen_at).getTime() < peerCutoffMs) {
@@ -2350,10 +2364,8 @@ export async function syncRoom({
 
   let currentPlayers = await getRoomPlayers(roomId);
   let effectiveHostId = roomBefore.host_user_id;
-  if (
-    currentPlayers.length > 0 &&
-    !currentPlayers.some((p) => p.user_id === effectiveHostId)
-  ) {
+  const hostEntry = currentPlayers.find((p) => p.user_id === effectiveHostId);
+  if (currentPlayers.length > 0 && !hostEntry) {
     const nextHost = currentPlayers[0];
     effectiveHostId = nextHost.user_id;
     await sql`
@@ -2371,6 +2383,12 @@ export async function syncRoom({
       eventType: 'host_changed',
       payload: { newHostUserId: nextHost.user_id, newHostUsername: nextHost.username },
     });
+    currentPlayers = await getRoomPlayers(roomId);
+  } else if (hostEntry && !hostEntry.is_host) {
+    await sql`
+      UPDATE room_players SET is_host = TRUE, is_ready = TRUE
+      WHERE room_id = ${roomId} AND user_id = ${effectiveHostId}
+    `;
     currentPlayers = await getRoomPlayers(roomId);
   }
 

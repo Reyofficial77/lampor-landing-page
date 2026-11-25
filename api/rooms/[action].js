@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import * as db from '../_lib/db.js';
+import { censorProfanity } from '../_lib/profanity.js';
 import {
   ALLOWED_DIFFICULTIES,
   formatZodError,
@@ -80,7 +81,7 @@ const syncRoomSchema = z.strictObject({
 export default async function handler(req, res) {
   const action = getRouteAction(req);
   const pre = await runSecurityPreflight(req, res, db, {
-    rateCategory: action === 'sync' ? 'sync' : 'general',
+    rateCategory: action === 'sync' || action === 'list' ? 'sync' : 'general',
     parseBody: req.method === 'POST',
   });
   if (pre.handled) return;
@@ -125,7 +126,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const cleanName = sanitizeText(parsed.data.name, 60);
+    const cleanName = censorProfanity(sanitizeText(parsed.data.name, 60));
     if (cleanName.length < 2) {
       return sendJson(res, 400, {
         ok: false,
@@ -470,16 +471,25 @@ export default async function handler(req, res) {
     }
 
     const normalizedEvents = (parsed.data.events || [])
-      .map((ev) => ({
-        type: ev.type || ev.eventType || 'custom',
-        payload: sanitizeDeepValue(ev.payload || ev.data || {}) || {},
-      }))
+      .map((ev) => {
+        const type = ev.type || ev.eventType || 'custom';
+        const payload = sanitizeDeepValue(ev.payload || ev.data || {}) || {};
+        if (type === 'chat') {
+          if (typeof payload.text === 'string') {
+            payload.text = censorProfanity(sanitizeText(payload.text, 220));
+          }
+          if (typeof payload.message === 'string') {
+            payload.message = censorProfanity(sanitizeText(payload.message, 220));
+          }
+        }
+        return { type, payload };
+      })
       .slice(0, 10);
 
     const synced = await db.syncRoom({
       roomId: room.id,
       userId: auth.user.id,
-      username: auth.user.username,
+      username: censorProfanity(auth.user.username),
       lastEventSeq: parsed.data.lastEventSeq,
       playerState: parsed.data.playerState,
       worldState: parsed.data.worldState,

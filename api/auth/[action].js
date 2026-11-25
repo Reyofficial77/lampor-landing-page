@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import * as db from '../_lib/db.js';
+import { censorProfanity, containsProfanity } from '../_lib/profanity.js';
 import {
   ACCOUNT_LOCKOUT_MINUTES,
   ACCOUNT_LOCKOUT_MAX_ATTEMPTS,
   createPowChallenge,
+  detectAvatarExtFromDataUrl,
   formatZodError,
   generateRandomToken,
   getBearerToken,
@@ -12,6 +14,7 @@ import {
   hashToken,
   loginPasswordSchema,
   requirePlayerSession,
+  rewriteAvatarFilename,
   runSecurityPreflight,
   sanitizeAvatarUrl,
   sanitizeProfileText,
@@ -52,6 +55,7 @@ const profileSchema = z.strictObject({
   displayName: z.string().max(40).optional(),
   bio: z.string().max(240).optional(),
   avatarUrl: z.string().max(20000).optional(),
+  avatarFilename: z.string().max(128).optional(),
 });
 
 const PLAYER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -85,6 +89,14 @@ export default async function handler(req, res) {
         ok: false,
         error: formatZodError(parsed.error),
         code: 'VALIDATION_ERROR',
+      });
+    }
+
+    if (containsProfanity(parsed.data.username)) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'Username mengandung kata kasar yang tidak diizinkan.',
+        code: 'PROFANITY_NOT_ALLOWED',
       });
     }
 
@@ -293,7 +305,7 @@ export default async function handler(req, res) {
   }
 
   if (action === 'me') {
-    const pre = await runSecurityPreflight(req, res, db, { rateCategory: 'general' });
+    const pre = await runSecurityPreflight(req, res, db, { rateCategory: 'sync' });
     if (pre.handled) return;
     if (req.method !== 'GET') {
       return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
@@ -363,14 +375,19 @@ export default async function handler(req, res) {
     }
 
     let safeAvatar;
+    let safeAvatarFilename = '';
     if (parsed.data.avatarUrl !== undefined) {
       safeAvatar = sanitizeAvatarUrl(parsed.data.avatarUrl);
       if (safeAvatar === null) {
         return sendJson(res, 400, {
           ok: false,
-          error: 'Format atau ukuran foto profil tidak valid (gunakan PNG/JPG/WEBP maks. ~14KB atau preset).',
+          error: 'Format, signature gambar, atau ukuran foto profil tidak valid (gunakan PNG/JPG/WEBP maks. ~14KB atau preset).',
           code: 'VALIDATION_ERROR',
         });
+      }
+      const ext = detectAvatarExtFromDataUrl(safeAvatar);
+      if (ext) {
+        safeAvatarFilename = rewriteAvatarFilename(parsed.data.avatarFilename || '', ext);
       }
     }
 
@@ -378,17 +395,18 @@ export default async function handler(req, res) {
       userId: auth.user.id,
       displayName:
         parsed.data.displayName !== undefined
-          ? sanitizeProfileText(parsed.data.displayName, 32, false)
+          ? censorProfanity(sanitizeProfileText(parsed.data.displayName, 32, false))
           : undefined,
       bio:
         parsed.data.bio !== undefined
-          ? sanitizeProfileText(parsed.data.bio, 200, true)
+          ? censorProfanity(sanitizeProfileText(parsed.data.bio, 200, true))
           : undefined,
       avatarUrl: safeAvatar,
     });
 
     return sendJson(res, 200, {
       ok: true,
+      avatarFilename: safeAvatarFilename,
       user: serializePlayerUser(updated),
     });
   }

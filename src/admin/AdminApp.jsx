@@ -105,11 +105,23 @@ export default function AdminApp({ onNavigateHome }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [refreshTick, setRefreshTick] = useState(0)
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [autoTick, setAutoTick] = useState(0)
   const [loggingOut, setLoggingOut] = useState(false)
   const [toast, setToast] = useState(null)
 
   const mobileTriggerRef = useRef(null)
   const wasMobileOpenRef = useRef(false)
+
+  useEffect(() => {
+    if (!admin || !autoRefresh) return undefined
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      if (document.querySelector('dialog[open]')) return
+      setAutoTick((t) => t + 1)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [admin, autoRefresh])
 
   const showToast = useCallback((type, text) => {
     setToast({ id: Date.now(), type, text })
@@ -321,6 +333,16 @@ export default function AdminApp({ onNavigateHome }) {
 
             <button
               type="button"
+              className={`admin-btn admin-btn--sm${autoRefresh ? ' admin-btn--primary' : ''}`}
+              aria-pressed={autoRefresh}
+              title="Segarkan otomatis setiap 1 detik"
+              onClick={() => setAutoRefresh((prev) => !prev)}
+            >
+              {autoRefresh ? 'Auto 1d: ON' : 'Auto 1d: OFF'}
+            </button>
+
+            <button
+              type="button"
               className="admin-btn admin-btn--sm"
               onClick={() => setRefreshTick((t) => t + 1)}
             >
@@ -366,6 +388,7 @@ export default function AdminApp({ onNavigateHome }) {
           {activeTab === 'overview' && (
             <OverviewTab
               refreshTick={refreshTick}
+              autoTick={autoTick}
               onNotify={showToast}
               onUnauthorized={handleUnauthorized}
             />
@@ -373,6 +396,7 @@ export default function AdminApp({ onNavigateHome }) {
           {activeTab === 'users' && (
             <UsersTab
               refreshTick={refreshTick}
+              autoTick={autoTick}
               onNotify={showToast}
               onUnauthorized={handleUnauthorized}
             />
@@ -380,6 +404,7 @@ export default function AdminApp({ onNavigateHome }) {
           {activeTab === 'rooms' && (
             <RoomsTab
               refreshTick={refreshTick}
+              autoTick={autoTick}
               onNotify={showToast}
               onUnauthorized={handleUnauthorized}
             />
@@ -387,6 +412,7 @@ export default function AdminApp({ onNavigateHome }) {
           {activeTab === 'security' && (
             <SecurityTab
               refreshTick={refreshTick}
+              autoTick={autoTick}
               onNotify={showToast}
               onUnauthorized={handleUnauthorized}
             />

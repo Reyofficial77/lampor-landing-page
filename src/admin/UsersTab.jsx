@@ -20,7 +20,7 @@ function validatePassword(pwd) {
   return ''
 }
 
-export default function UsersTab({ refreshTick, onNotify, onUnauthorized }) {
+export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthorized }) {
   const [searchInput, setSearchInput] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -37,6 +37,7 @@ export default function UsersTab({ refreshTick, onNotify, onUnauthorized }) {
   const [modalError, setModalError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const returnFocusRef = useRef(null)
+  const inFlightRef = useRef(false)
 
   const closeModal = useCallback(() => {
     setModal(null)
@@ -50,9 +51,13 @@ export default function UsersTab({ refreshTick, onNotify, onUnauthorized }) {
     returnFocusRef
   )
 
-  const loadUsers = useCallback(async () => {
-    setLoading(true)
-    setError('')
+  const loadUsers = useCallback(async (silent = false) => {
+    if (inFlightRef.current) return
+    inFlightRef.current = true
+    if (!silent) {
+      setLoading(true)
+      setError('')
+    }
     try {
       const res = await fetchUsers({
         search: appliedSearch,
@@ -68,15 +73,25 @@ export default function UsersTab({ refreshTick, onNotify, onUnauthorized }) {
         onUnauthorized(err.message)
         return
       }
-      setError(err.message || 'Gagal memuat daftar akun pemain.')
+      if (!silent) {
+        setError(err.message || 'Gagal memuat daftar akun pemain.')
+      }
     } finally {
-      setLoading(false)
+      inFlightRef.current = false
+      if (!silent) {
+        setLoading(false)
+      }
     }
   }, [appliedSearch, statusFilter, page, onUnauthorized])
 
   useEffect(() => {
-    loadUsers()
+    loadUsers(false)
   }, [loadUsers, refreshTick])
+
+  useEffect(() => {
+    if (!autoTick || modal) return
+    loadUsers(true)
+  }, [loadUsers, autoTick, modal])
 
   const openActionModal = (type, user, triggerEl) => {
     returnFocusRef.current = triggerEl

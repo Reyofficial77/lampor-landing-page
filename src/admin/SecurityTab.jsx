@@ -17,7 +17,7 @@ const SHOP_ITEM_OPTIONS = [
   { id: 'kentongan', label: 'Kentongan Pengalih (kentongan)' },
 ]
 
-export default function SecurityTab({ refreshTick, onNotify, onUnauthorized }) {
+export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnauthorized }) {
   const [subtab, setSubtab] = useState('ip_blocks')
 
   const [secLoading, setSecLoading] = useState(true)
@@ -50,6 +50,8 @@ export default function SecurityTab({ refreshTick, onNotify, onUnauthorized }) {
   const [modalError, setModalError] = useState('')
   const [modalBusy, setModalBusy] = useState(false)
   const returnFocusRef = useRef(null)
+  const secInFlightRef = useRef(false)
+  const codesInFlightRef = useRef(false)
 
   const closeModal = useCallback(() => {
     setModal(null)
@@ -63,9 +65,13 @@ export default function SecurityTab({ refreshTick, onNotify, onUnauthorized }) {
     returnFocusRef
   )
 
-  const loadSecurity = useCallback(async () => {
-    setSecLoading(true)
-    setSecError('')
+  const loadSecurity = useCallback(async (silent = false) => {
+    if (secInFlightRef.current) return
+    secInFlightRef.current = true
+    if (!silent) {
+      setSecLoading(true)
+      setSecError('')
+    }
     try {
       const res = await fetchSecurity()
       setSecurityLogs(Array.isArray(res.securityLogs) ? res.securityLogs : [])
@@ -76,15 +82,24 @@ export default function SecurityTab({ refreshTick, onNotify, onUnauthorized }) {
         onUnauthorized(err.message)
         return
       }
-      setSecError(err.message || 'Gagal memuat data keamanan dan audit server.')
+      if (!silent) {
+        setSecError(err.message || 'Gagal memuat data keamanan dan audit server.')
+      }
     } finally {
-      setSecLoading(false)
+      secInFlightRef.current = false
+      if (!silent) {
+        setSecLoading(false)
+      }
     }
   }, [onUnauthorized])
 
-  const loadCodes = useCallback(async () => {
-    setCodesLoading(true)
-    setCodesError('')
+  const loadCodes = useCallback(async (silent = false) => {
+    if (codesInFlightRef.current) return
+    codesInFlightRef.current = true
+    if (!silent) {
+      setCodesLoading(true)
+      setCodesError('')
+    }
     try {
       const res = await fetchRedeemCodes()
       const list = Array.isArray(res.codes) ? res.codes.map(normalizeRedeemCode) : []
@@ -94,16 +109,27 @@ export default function SecurityTab({ refreshTick, onNotify, onUnauthorized }) {
         onUnauthorized(err.message)
         return
       }
-      setCodesError(err.message || 'Gagal memuat daftar kode redeem.')
+      if (!silent) {
+        setCodesError(err.message || 'Gagal memuat daftar kode redeem.')
+      }
     } finally {
-      setCodesLoading(false)
+      codesInFlightRef.current = false
+      if (!silent) {
+        setCodesLoading(false)
+      }
     }
   }, [onUnauthorized])
 
   useEffect(() => {
-    loadSecurity()
-    loadCodes()
+    loadSecurity(false)
+    loadCodes(false)
   }, [loadSecurity, loadCodes, refreshTick])
+
+  useEffect(() => {
+    if (!autoTick || modal) return
+    loadSecurity(true)
+    loadCodes(true)
+  }, [loadSecurity, loadCodes, autoTick, modal])
 
   const handleBlockIpSubmit = async (e) => {
     e.preventDefault()

@@ -103,7 +103,7 @@ export default async function handler(req, res) {
 
   const pre = await runSecurityPreflight(req, res, db, {
     allowCredentials: true,
-    rateCategory: isLogin ? 'auth' : 'general',
+    rateCategory: isLogin ? 'auth' : req.method === 'GET' ? 'sync' : 'general',
     parseBody: req.method === 'POST',
     enforceHoneypot: isLogin && req.method === 'POST',
   });
