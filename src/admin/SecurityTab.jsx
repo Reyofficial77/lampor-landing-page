@@ -423,7 +423,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
           <section className="admin-panel" aria-labelledby="ip-list-heading">
             <div className="admin-panel__head">
               <h2 id="ip-list-heading">Daftar Blokir IP Aktif</h2>
-              <button type="button" className="admin-btn admin-btn--sm" onClick={loadSecurity}>
+              <button type="button" className="admin-btn admin-btn--sm" onClick={() => loadSecurity(false)}>
                 Segarkan
               </button>
             </div>
@@ -437,7 +437,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
               <div className="admin-state-box" role="alert">
                 <h3>Gagal Memuat Data Keamanan</h3>
                 <p>{secError}</p>
-                <button type="button" className="admin-btn admin-btn--primary" onClick={loadSecurity}>
+                <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadSecurity(false)}>
                   Coba Lagi
                 </button>
               </div>
@@ -462,24 +462,26 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                   <tbody>
                     {ipBlocks.map((b) => (
                       <tr key={b.id || b.ipAddress}>
-                        <td>
+                        <td data-label="Alamat IP & Alasan">
                           <div>
                             <span className="mono-chip">{b.ipAddress}</span>
                           </div>
                           <div className="admin-field__hint">{b.reason || 'Tanpa alasan'}</div>
                         </td>
-                        <td>
+                        <td data-label="Berakhir">
                           <div>{b.expiresAt ? formatTimestamp(b.expiresAt) : 'Permanen'}</div>
                           <div className="admin-field__hint">Oleh {b.blockedBy || 'admin'}</div>
                         </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="admin-btn admin-btn--sm"
-                            onClick={() => handleUnblockIp(b.ipAddress)}
-                          >
-                            Buka Blokir
-                          </button>
+                        <td data-label="Aksi">
+                          <div className="admin-row-actions">
+                            <button
+                              type="button"
+                              className="admin-btn admin-btn--sm"
+                              onClick={() => handleUnblockIp(b.ipAddress)}
+                            >
+                              Buka Blokir
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -519,7 +521,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
             <div className="admin-state-box" role="alert">
               <h3>Gagal Memuat Kode Redeem</h3>
               <p>{codesError}</p>
-              <button type="button" className="admin-btn admin-btn--primary" onClick={loadCodes}>
+              <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadCodes(false)}>
                 Coba Lagi
               </button>
             </div>
@@ -553,23 +555,23 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                 <tbody>
                   {codes.map((c) => (
                     <tr key={c.code}>
-                      <td>
+                      <td data-label="Kode">
                         <span className="mono-chip">{c.code}</span>
                         {c.descriptionId && (
                           <div className="admin-field__hint">{c.descriptionId}</div>
                         )}
                       </td>
-                      <td>
+                      <td data-label="Hadiah">
                         {c.rewardType === 'coins' && `${c.quantity} Koin`}
                         {c.rewardType === 'lives' && `${c.quantity} Nyawa Tambahan`}
                         {c.rewardType === 'item' && `${c.quantity}x ${c.itemId || 'item'}`}
                       </td>
-                      <td>
+                      <td data-label="Pemakaian">
                         <span className="mono-chip">
                           {c.usesCount} / {c.maxUses === null ? 'Tanpa batas' : c.maxUses}
                         </span>
                       </td>
-                      <td>
+                      <td data-label="Status">
                         <span
                           className={`admin-tag ${
                             c.isActive ? 'admin-tag--sage' : 'admin-tag--brass'
@@ -578,7 +580,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                           {c.isActive ? 'AKTIF' : 'NONAKTIF'}
                         </span>
                       </td>
-                      <td>
+                      <td data-label="Aksi">
                         <div className="admin-row-actions">
                           <button
                             type="button"
@@ -609,7 +611,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
         <section role="tabpanel" className="admin-panel" aria-labelledby="seclogs-heading">
           <div className="admin-panel__head">
             <h2 id="seclogs-heading">Catatan Kejadian Keamanan</h2>
-            <button type="button" className="admin-btn admin-btn--sm" onClick={loadSecurity}>
+            <button type="button" className="admin-btn admin-btn--sm" onClick={() => loadSecurity(false)}>
               Segarkan Log
             </button>
           </div>
@@ -623,7 +625,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
             <div className="admin-state-box" role="alert">
               <h3>Gagal Memuat Log Keamanan</h3>
               <p>{secError}</p>
-              <button type="button" className="admin-btn admin-btn--primary" onClick={loadSecurity}>
+              <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadSecurity(false)}>
                 Coba Lagi
               </button>
             </div>
@@ -649,8 +651,8 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                 <tbody>
                   {securityLogs.map((log, idx) => (
                     <tr key={log.id || `${log.createdAt}-${idx}`}>
-                      <td>{formatTimestamp(log.createdAt)}</td>
-                      <td>
+                      <td data-label="Waktu">{formatTimestamp(log.createdAt)}</td>
+                      <td data-label="Tipe Kejadian">
                         <span
                           className={`admin-tag ${
                             log.severity === 'high' || log.severity === 'critical'
@@ -661,18 +663,18 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                           {log.eventType || 'event'}
                         </span>
                       </td>
-                      <td>
+                      <td data-label="Subjek & IP">
                         <div>{log.username || 'Anonim'}</div>
                         {log.ipAddress && <span className="mono-chip">{log.ipAddress}</span>}
                       </td>
-                      <td>
+                      <td data-label="Detail">
                         <div>{log.path || '-'}</div>
                         <div className="admin-field__hint">
                           {typeof log.details === 'string'
                             ? log.details
                             : log.details
                               ? JSON.stringify(log.details)
-                              : ''}
+                              : '-'}
                         </div>
                       </td>
                     </tr>
@@ -688,7 +690,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
         <section role="tabpanel" className="admin-panel" aria-labelledby="auditlogs-heading">
           <div className="admin-panel__head">
             <h2 id="auditlogs-heading">Riwayat Audit Administrator</h2>
-            <button type="button" className="admin-btn admin-btn--sm" onClick={loadSecurity}>
+            <button type="button" className="admin-btn admin-btn--sm" onClick={() => loadSecurity(false)}>
               Segarkan Audit
             </button>
           </div>
@@ -702,7 +704,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
             <div className="admin-state-box" role="alert">
               <h3>Gagal Memuat Log Audit</h3>
               <p>{secError}</p>
-              <button type="button" className="admin-btn admin-btn--primary" onClick={loadSecurity}>
+              <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadSecurity(false)}>
                 Coba Lagi
               </button>
             </div>
@@ -728,18 +730,18 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                 <tbody>
                   {auditLogs.map((log, idx) => (
                     <tr key={log.id || `${log.createdAt}-${idx}`}>
-                      <td>{formatTimestamp(log.createdAt)}</td>
-                      <td>
+                      <td data-label="Waktu">{formatTimestamp(log.createdAt)}</td>
+                      <td data-label="Administrator">
                         <div>{log.adminUsername || log.adminUserId || 'admin'}</div>
                         {log.ipAddress && <span className="mono-chip">{log.ipAddress}</span>}
                       </td>
-                      <td>
+                      <td data-label="Aksi & Target">
                         <span className="admin-tag">{log.action}</span>
                         <div className="admin-field__hint">
                           {log.targetType} {log.targetId ? `(${log.targetId})` : ''}
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Detail">
                         <div className="admin-field__hint">
                           {typeof log.details === 'string'
                             ? log.details

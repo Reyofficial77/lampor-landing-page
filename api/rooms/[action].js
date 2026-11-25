@@ -227,12 +227,33 @@ export default async function handler(req, res) {
     if (room.status === 'closed') {
       return sendJson(res, 410, { ok: false, error: 'Room sudah ditutup.', code: 'ROOM_CLOSED' });
     }
-    if (room.status === 'playing' && !room.allow_late_join) {
-      return sendJson(res, 409, {
-        ok: false,
-        error: 'Permainan sudah berlangsung dan tidak menerima pemain baru.',
-        code: 'GAME_ALREADY_STARTED',
-      });
+
+    const currentPlayers = await db.getRoomPlayers(room.id);
+    const alreadyIn = currentPlayers.some((p) => p.user_id === auth.user.id);
+    const currentAct = Math.max(1, Number(room.world_state?.act ?? 1));
+    const furnaceBurning = Boolean(room.world_state?.furnaceBurning);
+
+    if (room.status === 'playing' && !alreadyIn) {
+      if (currentAct >= 3 || furnaceBurning) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: 'Tidak dapat bergabung saat Babak III sedang berlangsung.',
+          code: 'ACT_3_JOIN_BLOCKED',
+        });
+      }
+      if (!room.allow_late_join) {
+        const isFriend = await db.hasFriendInUserIds(
+          auth.user.id,
+          currentPlayers.map((p) => p.user_id)
+        );
+        if (!isFriend) {
+          return sendJson(res, 409, {
+            ok: false,
+            error: 'Permainan sudah dimulai dan late-join dinonaktifkan.',
+            code: 'GAME_ALREADY_STARTED',
+          });
+        }
+      }
     }
     if (room.password_hash) {
       if (!parsed.data.password || !verifyPassword(parsed.data.password, room.password_hash)) {
@@ -244,8 +265,6 @@ export default async function handler(req, res) {
       }
     }
 
-    const currentPlayers = await db.getRoomPlayers(room.id);
-    const alreadyIn = currentPlayers.some((p) => p.user_id === auth.user.id);
     if (!alreadyIn && currentPlayers.length >= room.max_players) {
       return sendJson(res, 409, { ok: false, error: 'Room sudah penuh.', code: 'ROOM_FULL' });
     }
@@ -260,6 +279,8 @@ export default async function handler(req, res) {
       ok: true,
       room: serializeRoom(joined.room, joined.players),
       players: joined.players.map(serializeRoomPlayer),
+      worldState: sanitizeDeepValue(joined.room.world_state || {}) || {},
+      lastEventSeq: Number(joined.room.last_event_seq ?? 0),
     });
   }
 

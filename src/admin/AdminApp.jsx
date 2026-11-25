@@ -194,8 +194,8 @@ export default function AdminApp({ onNavigateHome }) {
     )
   }
 
-  const currentItem =
-    NAV_GROUPS.flatMap((g) => g.items).find((item) => item.id === activeTab) || NAV_GROUPS[0].items[0]
+  const allNavItems = NAV_GROUPS.flatMap((g) => g.items)
+  const currentItem = allNavItems.find((item) => item.id === activeTab) || NAV_GROUPS[0].items[0]
 
   return (
     <div className={`admin-shell${collapsed ? ' is-collapsed' : ''}`}>
@@ -304,8 +304,8 @@ export default function AdminApp({ onNavigateHome }) {
               onClick={() => setMobileOpen((prev) => !prev)}
             >
               <svg
-                width="20"
-                height="20"
+                width="18"
+                height="18"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -317,8 +317,9 @@ export default function AdminApp({ onNavigateHome }) {
                 <line x1="4" y1="12" x2="20" y2="12" />
                 <line x1="4" y1="17" x2="20" y2="17" />
               </svg>
+              <span className="admin-mobile-trigger__text">Menu</span>
             </button>
-            <div>
+            <div className="admin-topbar__heading">
               <h1 className="admin-topbar__title">{currentItem.label}</h1>
               <p className="admin-topbar__sub">{currentItem.subtitle}</p>
             </div>
@@ -327,38 +328,60 @@ export default function AdminApp({ onNavigateHome }) {
           <div className="admin-topbar__right">
             <div className="admin-operator-badge" title={`Masuk sebagai ${admin.username}`}>
               <span className="admin-state-dot" aria-hidden="true" />
-              <span>{admin.username}</span>
+              <span className="admin-operator-badge__name">{admin.username}</span>
               <span className="admin-tag">{admin.role || 'admin'}</span>
             </div>
 
-            <button
-              type="button"
-              className={`admin-btn admin-btn--sm${autoRefresh ? ' admin-btn--primary' : ''}`}
-              aria-pressed={autoRefresh}
-              title="Segarkan otomatis setiap 1 detik"
-              onClick={() => setAutoRefresh((prev) => !prev)}
-            >
-              {autoRefresh ? 'Auto 1d: ON' : 'Auto 1d: OFF'}
-            </button>
+            <div className="admin-topbar__controls">
+              <button
+                type="button"
+                className={`admin-btn admin-btn--sm${autoRefresh ? ' admin-btn--primary' : ''}`}
+                aria-pressed={autoRefresh}
+                title="Segarkan otomatis setiap 1 detik"
+                onClick={() => setAutoRefresh((prev) => !prev)}
+              >
+                {autoRefresh ? 'Auto 1d: ON' : 'Auto 1d: OFF'}
+              </button>
 
-            <button
-              type="button"
-              className="admin-btn admin-btn--sm"
-              onClick={() => setRefreshTick((t) => t + 1)}
-            >
-              Segarkan
-            </button>
+              <button
+                type="button"
+                className="admin-btn admin-btn--sm"
+                onClick={() => setRefreshTick((t) => t + 1)}
+              >
+                Segarkan
+              </button>
 
-            <button
-              type="button"
-              className="admin-btn admin-btn--danger admin-btn--sm"
-              onClick={handleLogout}
-              disabled={loggingOut}
-            >
-              {loggingOut ? 'Keluar...' : 'Keluar'}
-            </button>
+              <button
+                type="button"
+                className="admin-btn admin-btn--danger admin-btn--sm"
+                onClick={handleLogout}
+                disabled={loggingOut}
+              >
+                {loggingOut ? 'Keluar...' : 'Keluar'}
+              </button>
+            </div>
           </div>
         </header>
+
+        <nav className="admin-mobile-tabs" aria-label="Navigasi cepat konsol">
+          {allNavItems.map((item) => {
+            const active = activeTab === item.id
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={`admin-mobile-tab${active ? ' is-active' : ''}`}
+                aria-current={active ? 'page' : undefined}
+                onClick={() => setActiveTab(item.id)}
+              >
+                <span className="admin-nav-item__icon" aria-hidden="true">
+                  <NavGlyph name={item.icon} />
+                </span>
+                <span>{item.label}</span>
+              </button>
+            )
+          })}
+        </nav>
 
         <main className="admin-content">
           {toast && (

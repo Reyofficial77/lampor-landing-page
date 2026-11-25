@@ -1168,3 +1168,307 @@ test('Sliding-window rate limiter enforces auth request limit', async () => {
   }
   assert.equal(hit429, true);
 });
+
+test('Admin online presence tracking, status=online/offline filters, and overview onlineUsers', async () => {
+  const chAdmin = await solvePow('10.0.9.1');
+  const adminLog = await api('/api/admin/login', {
+    method: 'POST',
+    ip: '10.0.9.1',
+    body: {
+      username: 'admin_lampor',
+      password: 'AdminPassword123',
+      challenge: chAdmin,
+      website: '',
+    },
+  });
+  assert.equal(adminLog.status, 200);
+  const jar = parseSetCookieJar(adminLog.setCookies);
+
+  const pReg = await registerPlayer('PemainOnline1', 'OnlinePass123', '10.0.9.2');
+  assert.equal(pReg.status, 201);
+  const pToken = pReg.json.token;
+  const pId = pReg.json.user.id;
+
+  const overviewBefore = await api('/api/admin/overview', {
+    ip: '10.0.9.1',
+    cookies: jar,
+  });
+  assert.equal(overviewBefore.status, 200);
+  assert.equal(typeof overviewBefore.json.stats.onlineUsers, 'number');
+  assert.ok(overviewBefore.json.stats.onlineUsers >= 1);
+
+  const onlineList = await api('/api/admin/users?status=online&search=PemainOnline1&page=1', {
+    ip: '10.0.9.1',
+    cookies: jar,
+  });
+  assert.equal(onlineList.status, 200);
+  const onlineRow = onlineList.json.users.find((u) => u.id === pId);
+  assert.ok(onlineRow);
+  assert.equal(onlineRow.isOnline, true);
+  assert.ok(onlineRow.lastSeenAt);
+
+  // Logout immediately marks user offline
+  const pLogout = await api('/api/auth/logout', {
+    method: 'POST',
+    token: pToken,
+    ip: '10.0.9.2',
+  });
+  assert.equal(pLogout.status, 200);
+
+  const onlineAfter = await api('/api/admin/users?status=online&search=PemainOnline1&page=1', {
+    ip: '10.0.9.1',
+    cookies: jar,
+  });
+  assert.equal(onlineAfter.status, 200);
+  assert.equal(onlineAfter.json.users.some((u) => u.id === pId), false);
+
+  const offlineAfter = await api('/api/admin/users?status=offline&search=PemainOnline1&page=1', {
+    ip: '10.0.9.1',
+    cookies: jar,
+  });
+  assert.equal(offlineAfter.status, 200);
+  const offlineRow = offlineAfter.json.users.find((u) => u.id === pId);
+  assert.ok(offlineRow);
+  assert.equal(offlineRow.isOnline, false);
+});
+
+test('Friends directory caps at 10 top players, supports search/add/remove, active room presence, and Babak 3 join guard', async () => {
+  // Create 12 players with varied wins/coins to verify top 10 cap and ordering
+  const players = [];
+  for (let i = 0; i < 12; i += 1) {
+    const ip = `10.0.10.${10 + i}`;
+    const reg = await registerPlayer(`LigaPemain_${String(i).padStart(2, '0')}`, 'LigaPass123', ip);
+    assert.equal(reg.status, 201);
+    const syncRes = await api('/api/auth/sync', {
+      method: 'POST',
+      token: reg.json.token,
+      ip,
+      body: {
+        totalWins: i,
+        coins: (i + 1) * 100,
+        saveSeq: 1,
+      },
+    });
+    assert.equal(syncRes.status, 200);
+    players.push({ ...reg.json.user, token: reg.json.token, ip });
+  }
+
+  const host = players[11]; // LigaPemain_11 (11 wins)
+  const friend1 = players[10]; // LigaPemain_10 (10 wins)
+  const friend2 = players[9]; // LigaPemain_09 (9 wins)
+  const stranger = players[0]; // LigaPemain_00 (0 wins)
+
+  // Default directory capped at 10 sorted by totalWins DESC, coins DESC
+  const listDefault = await api('/api/friends/list', {
+    token: friend1.token,
+    ip: friend1.ip,
+  });
+  assert.equal(listDefault.status, 200);
+  assert.equal(listDefault.json.ok, true);
+  assert.equal(listDefault.json.directory.length, 10);
+  assert.equal(listDefault.json.directory[0].username, 'LigaPemain_11');
+  assert.ok(listDefault.json.directory[0].totalWins >= listDefault.json.directory[1].totalWins);
+
+  // Search by username finds LigaPemain_00 even outside top 10
+  const listSearch = await api('/api/friends/list?search=LigaPemain_00', {
+    token: friend1.token,
+    ip: friend1.ip,
+  });
+  assert.equal(listSearch.status, 200);
+  assert.ok(listSearch.json.directory.some((p) => p.id === stranger.id));
+
+  // Self-add rejected with 400 CANNOT_ADD_SELF
+  const selfAdd = await api('/api/friends/add', {
+    method: 'POST',
+    token: friend1.token,
+    ip: friend1.ip,
+    body: { username: friend1.username },
+  });
+  assert.equal(selfAdd.status, 400);
+  assert.equal(selfAdd.json.code, 'CANNOT_ADD_SELF');
+
+  // Add host as friend by username
+  const addF1 = await api('/api/friends/add', {
+    method: 'POST',
+    token: friend1.token,
+    ip: friend1.ip,
+    body: { username: host.username },
+  });
+  assert.equal(addF1.status, 200);
+  assert.equal(addF1.json.friend.id, host.id);
+  assert.equal(addF1.json.friend.isFriend, true);
+
+  const addF2 = await api('/api/friends/add', {
+    method: 'POST',
+    token: friend2.token,
+    ip: friend2.ip,
+    body: { username: host.username },
+  });
+  assert.equal(addF2.status, 200);
+
+  // Host creates multiplayer room with allowLateJoin: false
+  const createRoom = await api('/api/rooms/create', {
+    method: 'POST',
+    token: host.token,
+    ip: host.ip,
+    body: {
+      name: 'Desa Teman',
+      mode: 'multiplayer',
+      maxPlayers: 4,
+      difficulty: 'normal',
+      canUseShopItems: true,
+      allowLateJoin: false,
+    },
+  });
+  assert.equal(createRoom.status, 201);
+  const roomId = createRoom.json.room.id;
+
+  // Start game -> status: playing, act: 1
+  const startRoom = await api('/api/rooms/start', {
+    method: 'POST',
+    token: host.token,
+    ip: host.ip,
+    body: { roomId },
+  });
+  assert.equal(startRoom.status, 200);
+  assert.equal(startRoom.json.room.status, 'playing');
+  assert.equal(startRoom.json.room.currentAct, 1);
+  assert.equal(startRoom.json.room.furnaceBurning, false);
+
+  // Non-friend blocked from joining playing room with allowLateJoin: false
+  const strangerJoin = await api('/api/rooms/join', {
+    method: 'POST',
+    token: stranger.token,
+    ip: stranger.ip,
+    body: { roomId },
+  });
+  assert.equal(strangerJoin.status, 409);
+  assert.equal(strangerJoin.json.code, 'GAME_ALREADY_STARTED');
+
+  // Friend1 sees host's activeRoom with currentAct: 1 and canJoin: true
+  const f1ListAct1 = await api('/api/friends/list', {
+    token: friend1.token,
+    ip: friend1.ip,
+  });
+  assert.equal(f1ListAct1.status, 200);
+  const hostFriendCard = f1ListAct1.json.friends.find((f) => f.id === host.id);
+  assert.ok(hostFriendCard);
+  assert.ok(hostFriendCard.activeRoom);
+  assert.equal(hostFriendCard.activeRoom.id, roomId);
+  assert.equal(hostFriendCard.activeRoom.currentAct, 1);
+  assert.equal(hostFriendCard.activeRoom.canJoin, true);
+
+  // Friend1 joins during Babak 1 (even though allowLateJoin: false) and gets worldState
+  const f1Join = await api('/api/rooms/join', {
+    method: 'POST',
+    token: friend1.token,
+    ip: friend1.ip,
+    body: { roomId },
+  });
+  assert.equal(f1Join.status, 200);
+  assert.equal(f1Join.json.worldState.act, 1);
+  assert.equal(typeof f1Join.json.lastEventSeq, 'number');
+
+  // Host advances to Babak 2 -> Friend2 can still join
+  const syncAct2 = await api('/api/rooms/sync', {
+    method: 'POST',
+    token: host.token,
+    ip: host.ip,
+    body: {
+      roomId,
+      lastEventSeq: 0,
+      worldState: { act: 2, hour: 3, minute: 30, furnaceBurning: false },
+    },
+  });
+  assert.equal(syncAct2.status, 200);
+
+  const f2Join = await api('/api/rooms/join', {
+    method: 'POST',
+    token: friend2.token,
+    ip: friend2.ip,
+    body: { roomId },
+  });
+  assert.equal(f2Join.status, 200);
+  assert.equal(f2Join.json.worldState.act, 2);
+
+  // Friend2 leaves, then host triggers Babak 3 (act: 3)
+  await api('/api/rooms/leave', {
+    method: 'POST',
+    token: friend2.token,
+    ip: friend2.ip,
+    body: { roomId },
+  });
+
+  const syncAct3 = await api('/api/rooms/sync', {
+    method: 'POST',
+    token: host.token,
+    ip: host.ip,
+    body: {
+      roomId,
+      lastEventSeq: 0,
+      worldState: { act: 3, hour: 4, minute: 45, furnaceBurning: false },
+    },
+  });
+  assert.equal(syncAct3.status, 200);
+
+  const f2ListAct3 = await api('/api/friends/list', {
+    token: friend2.token,
+    ip: friend2.ip,
+  });
+  const hostCardAct3 = f2ListAct3.json.friends.find((f) => f.id === host.id);
+  assert.equal(hostCardAct3.activeRoom.currentAct, 3);
+  assert.equal(hostCardAct3.activeRoom.canJoin, false);
+
+  const f2JoinAct3 = await api('/api/rooms/join', {
+    method: 'POST',
+    token: friend2.token,
+    ip: friend2.ip,
+    body: { roomId },
+  });
+  assert.equal(f2JoinAct3.status, 409);
+  assert.equal(f2JoinAct3.json.code, 'ACT_3_JOIN_BLOCKED');
+
+  // furnaceBurning: true also blocks join with 409 ACT_3_JOIN_BLOCKED even when act is 2
+  await api('/api/rooms/sync', {
+    method: 'POST',
+    token: host.token,
+    ip: host.ip,
+    body: {
+      roomId,
+      lastEventSeq: 0,
+      worldState: { act: 2, hour: 4, minute: 50, furnaceBurning: true },
+    },
+  });
+
+  const f2ListFurnace = await api('/api/friends/list', {
+    token: friend2.token,
+    ip: friend2.ip,
+  });
+  const hostCardFurnace = f2ListFurnace.json.friends.find((f) => f.id === host.id);
+  assert.equal(hostCardFurnace.activeRoom.furnaceBurning, true);
+  assert.equal(hostCardFurnace.activeRoom.canJoin, false);
+
+  const f2JoinFurnace = await api('/api/rooms/join', {
+    method: 'POST',
+    token: friend2.token,
+    ip: friend2.ip,
+    body: { roomId },
+  });
+  assert.equal(f2JoinFurnace.status, 409);
+  assert.equal(f2JoinFurnace.json.code, 'ACT_3_JOIN_BLOCKED');
+
+  // Remove friend
+  const removeRes = await api('/api/friends/remove', {
+    method: 'POST',
+    token: friend1.token,
+    ip: friend1.ip,
+    body: { friendUserId: host.id },
+  });
+  assert.equal(removeRes.status, 200);
+
+  const f1ListAfterRemove = await api('/api/friends/list', {
+    token: friend1.token,
+    ip: friend1.ip,
+  });
+  assert.equal(f1ListAfterRemove.json.friends.some((f) => f.id === host.id), false);
+});

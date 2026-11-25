@@ -310,7 +310,18 @@ export default async function handler(req, res) {
       return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
     }
     const search = String(req.query?.search || '').slice(0, 64);
-    const status = String(req.query?.status || 'all').toLowerCase();
+    const rawStatus = String(req.query?.status || 'all').toLowerCase();
+    const allowedStatuses = new Set([
+      'all',
+      'active',
+      'banned',
+      'verified',
+      'admin',
+      'locked',
+      'online',
+      'offline',
+    ]);
+    const status = allowedStatuses.has(rawStatus) ? rawStatus : 'all';
     const page = Number(req.query?.page || 1);
     const result = await db.listUsersAdmin({ search, status, page, pageSize: 20 });
     return sendJson(res, 200, {

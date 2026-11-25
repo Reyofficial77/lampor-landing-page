@@ -10,6 +10,8 @@ import {
   sanitizeText,
 } from './security.js';
 
+export const ONLINE_WINDOW_MS = 45_000;
+
 let sqlClient = null;
 let neonSchemaPromise = null;
 let warnedMemoryFallback = false;
@@ -56,6 +58,7 @@ function createInitialMemoryState() {
     initialized: false,
     users: new Map(),
     sessions: new Map(),
+    friendships: new Map(),
     rooms: new Map(),
     roomPlayers: new Map(),
     roomEvents: [],
@@ -135,6 +138,8 @@ function normalizeUserRow(row) {
     failed_login_attempts: Number(row.failed_login_attempts ?? 0),
     item_stash: normalizeItemStash(parseJsonField(row.item_stash, {})),
     redeemed_codes: normalizeRedeemedCodes(parseJsonField(row.redeemed_codes, [])),
+    ...(row.is_online !== undefined ? { is_online: Boolean(row.is_online) } : {}),
+    ...(row.last_seen_at !== undefined ? { last_seen_at: row.last_seen_at } : {}),
   };
 }
 
@@ -277,6 +282,16 @@ async function runNeonSchemaInit() {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS friendships (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      friend_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, friend_id)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_friendships_user_created ON friendships(user_id, created_at DESC)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS rooms (
@@ -1206,6 +1221,37 @@ export async function revokeUserSessions(userId) {
   await sql`UPDATE sessions SET revoked_at = NOW() WHERE user_id = ${userId} AND revoked_at IS NULL`;
 }
 
+function getMemUserPresence(userId, fallbackLastLoginAt = null, nowMs = Date.now(), isBanned = false) {
+  const onlineCutoffMs = nowMs - ONLINE_WINDOW_MS;
+  let isOnline = false;
+  let latestSeenMs = null;
+
+  for (const s of mem.sessions.values()) {
+    if (s.user_id !== userId) continue;
+    const seenMs = s.last_seen_at ? new Date(s.last_seen_at).getTime() : 0;
+    if (seenMs > 0 && (latestSeenMs === null || seenMs > latestSeenMs)) {
+      latestSeenMs = seenMs;
+    }
+    if (
+      !isBanned &&
+      !s.revoked_at &&
+      new Date(s.expires_at).getTime() > nowMs &&
+      seenMs >= onlineCutoffMs
+    ) {
+      isOnline = true;
+    }
+  }
+
+  const lastSeenAt =
+    latestSeenMs !== null
+      ? new Date(latestSeenMs)
+      : fallbackLastLoginAt
+        ? new Date(fallbackLastLoginAt)
+        : null;
+
+  return { is_online: isOnline, last_seen_at: lastSeenAt };
+}
+
 export async function listUsersAdmin({ search = '', status = 'all', page = 1, pageSize = 20 }) {
   await ensureSchema();
   const safePage = Math.max(1, Math.trunc(Number(page) || 1));
@@ -1214,7 +1260,10 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
 
   if (isMemoryMode()) {
     const nowMs = Date.now();
-    let list = Array.from(mem.users.values()).map(normalizeUserRow);
+    let list = Array.from(mem.users.values()).map((u) => {
+      const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
+      return normalizeUserRow({ ...u, ...presence });
+    });
     if (cleanSearch) {
       list = list.filter((u) => u.username_lower.includes(cleanSearch));
     }
@@ -1228,6 +1277,10 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
       list = list.filter((u) => u.role === 'admin');
     } else if (status === 'locked') {
       list = list.filter((u) => u.locked_until && new Date(u.locked_until).getTime() > nowMs);
+    } else if (status === 'online') {
+      list = list.filter((u) => u.is_online);
+    } else if (status === 'offline') {
+      list = list.filter((u) => !u.is_online);
     }
     list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     const total = list.length;
@@ -1239,31 +1292,74 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
   const like = `%${escapeLikePattern(cleanSearch)}%`;
   const hasSearch = cleanSearch.length > 0;
   const offset = (safePage - 1) * safeSize;
+  const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
 
   const countRows = await sql`
-    SELECT COUNT(*)::int AS total FROM users
-    WHERE (${!hasSearch} OR username_lower LIKE ${like} ESCAPE '!')
+    WITH user_presence AS (
+      SELECT
+        u.*,
+        (
+          u.is_banned = FALSE
+          AND EXISTS (
+            SELECT 1 FROM sessions s
+            WHERE s.user_id = u.id
+              AND s.revoked_at IS NULL
+              AND s.expires_at > NOW()
+              AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+          )
+        ) AS is_online,
+        COALESCE(
+          (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+          u.last_login_at
+        ) AS last_seen_at
+      FROM users u
+    )
+    SELECT COUNT(*)::int AS total FROM user_presence up
+    WHERE (${!hasSearch} OR up.username_lower LIKE ${like} ESCAPE '!')
       AND (
         ${status === 'all'}
-        OR (${status === 'active'} AND is_banned = FALSE)
-        OR (${status === 'banned'} AND is_banned = TRUE)
-        OR (${status === 'verified'} AND is_verified = TRUE)
-        OR (${status === 'admin'} AND role = 'admin')
-        OR (${status === 'locked'} AND locked_until IS NOT NULL AND locked_until > NOW())
+        OR (${status === 'active'} AND up.is_banned = FALSE)
+        OR (${status === 'banned'} AND up.is_banned = TRUE)
+        OR (${status === 'verified'} AND up.is_verified = TRUE)
+        OR (${status === 'admin'} AND up.role = 'admin')
+        OR (${status === 'locked'} AND up.locked_until IS NOT NULL AND up.locked_until > NOW())
+        OR (${status === 'online'} AND up.is_online = TRUE)
+        OR (${status === 'offline'} AND up.is_online = FALSE)
       )
   `;
   const rows = await sql`
-    SELECT * FROM users
-    WHERE (${!hasSearch} OR username_lower LIKE ${like} ESCAPE '!')
+    WITH user_presence AS (
+      SELECT
+        u.*,
+        (
+          u.is_banned = FALSE
+          AND EXISTS (
+            SELECT 1 FROM sessions s
+            WHERE s.user_id = u.id
+              AND s.revoked_at IS NULL
+              AND s.expires_at > NOW()
+              AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+          )
+        ) AS is_online,
+        COALESCE(
+          (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+          u.last_login_at
+        ) AS last_seen_at
+      FROM users u
+    )
+    SELECT * FROM user_presence up
+    WHERE (${!hasSearch} OR up.username_lower LIKE ${like} ESCAPE '!')
       AND (
         ${status === 'all'}
-        OR (${status === 'active'} AND is_banned = FALSE)
-        OR (${status === 'banned'} AND is_banned = TRUE)
-        OR (${status === 'verified'} AND is_verified = TRUE)
-        OR (${status === 'admin'} AND role = 'admin')
-        OR (${status === 'locked'} AND locked_until IS NOT NULL AND locked_until > NOW())
+        OR (${status === 'active'} AND up.is_banned = FALSE)
+        OR (${status === 'banned'} AND up.is_banned = TRUE)
+        OR (${status === 'verified'} AND up.is_verified = TRUE)
+        OR (${status === 'admin'} AND up.role = 'admin')
+        OR (${status === 'locked'} AND up.locked_until IS NOT NULL AND up.locked_until > NOW())
+        OR (${status === 'online'} AND up.is_online = TRUE)
+        OR (${status === 'offline'} AND up.is_online = FALSE)
       )
-    ORDER BY created_at DESC
+    ORDER BY up.created_at DESC
     LIMIT ${safeSize} OFFSET ${offset}
   `;
 
@@ -1347,6 +1443,10 @@ export async function adminDeleteUser(userId) {
     const existed = mem.users.delete(userId);
     for (const [tokenHash, s] of mem.sessions.entries()) {
       if (s.user_id === userId) mem.sessions.delete(tokenHash);
+    }
+    mem.friendships.delete(userId);
+    for (const fMap of mem.friendships.values()) {
+      fMap.delete(userId);
     }
     for (const [roomId, playersMap] of mem.roomPlayers.entries()) {
       playersMap.delete(userId);
@@ -1654,8 +1754,19 @@ export async function getOverviewStats() {
       if (u.is_banned) bannedUsers += 1;
     }
     let activeSessions = 0;
+    const onlineCutoffMs = nowMs - ONLINE_WINDOW_MS;
+    const onlineUserIds = new Set();
     for (const s of mem.sessions.values()) {
-      if (!s.revoked_at && new Date(s.expires_at).getTime() > nowMs) activeSessions += 1;
+      if (!s.revoked_at && new Date(s.expires_at).getTime() > nowMs) {
+        activeSessions += 1;
+        const seenMs = s.last_seen_at ? new Date(s.last_seen_at).getTime() : 0;
+        if (seenMs >= onlineCutoffMs) {
+          const u = mem.users.get(s.user_id);
+          if (u && !u.is_banned) {
+            onlineUserIds.add(u.id);
+          }
+        }
+      }
     }
     let activeMultiplayerRooms = 0;
     let activeSandboxRooms = 0;
@@ -1676,6 +1787,7 @@ export async function getOverviewStats() {
       totalUsers,
       bannedUsers,
       activeSessions,
+      onlineUsers: onlineUserIds.size,
       activeMultiplayerRooms,
       activeSandboxRooms,
       blockedIps,
@@ -1684,6 +1796,7 @@ export async function getOverviewStats() {
   }
 
   const sql = getSql();
+  const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
   const [uStats] = await sql`
     SELECT
       COUNT(*)::int AS total_users,
@@ -1694,6 +1807,15 @@ export async function getOverviewStats() {
     SELECT COUNT(*)::int AS active_sessions
     FROM sessions
     WHERE revoked_at IS NULL AND expires_at > NOW()
+  `;
+  const [onlineStats] = await sql`
+    SELECT COUNT(DISTINCT s.user_id)::int AS online_users
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE u.is_banned = FALSE
+      AND s.revoked_at IS NULL
+      AND s.expires_at > NOW()
+      AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
   `;
   const [rStats] = await sql`
     SELECT
@@ -1717,6 +1839,7 @@ export async function getOverviewStats() {
     totalUsers: Number(uStats?.total_users ?? 0),
     bannedUsers: Number(uStats?.banned_users ?? 0),
     activeSessions: Number(sStats?.active_sessions ?? 0),
+    onlineUsers: Number(onlineStats?.online_users ?? 0),
     activeMultiplayerRooms: Number(rStats?.mp_rooms ?? 0),
     activeSandboxRooms: Number(rStats?.sb_rooms ?? 0),
     blockedIps: Number(bStats?.blocked_ips ?? 0),
@@ -2507,4 +2630,344 @@ export async function broadcastRoomAdmin({ roomId, message, adminUsername = 'adm
     payload: { message: cleanMsg, sender: adminUsername },
   });
   return normalizeRoomRow(rows[0]);
+}
+
+export async function getActiveRoomMapForUsers(userIds) {
+  await ensureSchema();
+  const targetSet = new Set((userIds || []).filter(Boolean));
+  const result = new Map();
+  if (targetSet.size === 0) return result;
+
+  const nowMs = Date.now();
+  const roomCutoffMs = nowMs - 15 * 60_000;
+  const peerCutoffMs = nowMs - 90_000;
+
+  if (isMemoryMode()) {
+    const activeRooms = Array.from(mem.rooms.values())
+      .filter(
+        (r) =>
+          (r.status === 'lobby' || r.status === 'playing') &&
+          new Date(r.last_activity_at).getTime() >= roomCutoffMs
+      )
+      .sort((a, b) => new Date(b.last_activity_at).getTime() - new Date(a.last_activity_at).getTime());
+
+    for (const room of activeRooms) {
+      const playersMap = mem.roomPlayers.get(room.id);
+      if (!playersMap || playersMap.size === 0) continue;
+      const activePlayers = Array.from(playersMap.values()).filter(
+        (p) => new Date(p.last_seen_at).getTime() >= peerCutoffMs
+      );
+      if (activePlayers.length === 0) continue;
+
+      const roomSummaryRaw = {
+        ...normalizeRoomRow(room),
+        playerCount: activePlayers.length,
+      };
+
+      for (const p of activePlayers) {
+        if (targetSet.has(p.user_id) && !result.has(p.user_id)) {
+          result.set(p.user_id, roomSummaryRaw);
+        }
+      }
+    }
+    return result;
+  }
+
+  const uniqueIds = Array.from(targetSet);
+  const sql = getSql();
+  const roomCutoffIso = new Date(roomCutoffMs).toISOString();
+  const peerCutoffIso = new Date(peerCutoffMs).toISOString();
+  const rows = await sql`
+    SELECT
+      rp.user_id AS target_user_id,
+      r.*,
+      (
+        SELECT COUNT(*)::int
+        FROM room_players rp2
+        WHERE rp2.room_id = r.id
+          AND rp2.last_seen_at >= ${peerCutoffIso}::timestamptz
+      ) AS player_count
+    FROM room_players rp
+    JOIN rooms r ON r.id = rp.room_id
+    WHERE rp.user_id = ANY(${uniqueIds}::uuid[])
+      AND rp.last_seen_at >= ${peerCutoffIso}::timestamptz
+      AND r.status IN ('lobby', 'playing')
+      AND r.last_activity_at >= ${roomCutoffIso}::timestamptz
+    ORDER BY r.last_activity_at DESC
+  `;
+
+  for (const row of rows) {
+    if (!result.has(row.target_user_id)) {
+      result.set(row.target_user_id, {
+        ...normalizeRoomRow(row),
+        playerCount: Number(row.player_count ?? 0),
+      });
+    }
+  }
+  return result;
+}
+
+export async function addFriend(userId, friendUserId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    let fMap = mem.friendships.get(userId);
+    if (!fMap) {
+      fMap = new Map();
+      mem.friendships.set(userId, fMap);
+    }
+    if (!fMap.has(friendUserId)) {
+      fMap.set(friendUserId, new Date().toISOString());
+    }
+    return true;
+  }
+  const sql = getSql();
+  await sql`
+    INSERT INTO friendships (user_id, friend_id)
+    VALUES (${userId}, ${friendUserId})
+    ON CONFLICT (user_id, friend_id) DO NOTHING
+  `;
+  return true;
+}
+
+export async function removeFriend(userId, friendUserId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    const fMap = mem.friendships.get(userId);
+    if (!fMap) return false;
+    return fMap.delete(friendUserId);
+  }
+  const sql = getSql();
+  const rows = await sql`
+    DELETE FROM friendships
+    WHERE user_id = ${userId} AND friend_id = ${friendUserId}
+    RETURNING friend_id
+  `;
+  return rows.length > 0;
+}
+
+export async function hasFriendInUserIds(userId, candidateUserIds) {
+  await ensureSchema();
+  const candidates = Array.from(new Set((candidateUserIds || []).filter(Boolean)));
+  if (candidates.length === 0) return false;
+
+  if (isMemoryMode()) {
+    const myFriends = mem.friendships.get(userId);
+    for (const cid of candidates) {
+      if (myFriends?.has(cid)) return true;
+      if (mem.friendships.get(cid)?.has(userId)) return true;
+    }
+    return false;
+  }
+
+  const sql = getSql();
+  const rows = await sql`
+    SELECT 1 FROM friendships
+    WHERE (user_id = ${userId} AND friend_id = ANY(${candidates}::uuid[]))
+       OR (friend_id = ${userId} AND user_id = ANY(${candidates}::uuid[]))
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+export async function listFriendsWithPresence(userId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    const fMap = mem.friendships.get(userId);
+    if (!fMap || fMap.size === 0) return [];
+    const nowMs = Date.now();
+    const friends = [];
+    for (const friendId of fMap.keys()) {
+      const u = mem.users.get(friendId);
+      if (!u || u.is_banned) continue;
+      const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
+      friends.push(normalizeUserRow({ ...u, ...presence }));
+    }
+    const roomMap = await getActiveRoomMapForUsers(friends.map((u) => u.id));
+    return friends
+      .map((u) => ({
+        ...u,
+        activeRoomRaw: roomMap.get(u.id) || null,
+      }))
+      .sort((a, b) => {
+        const onlineDiff = Number(Boolean(b.is_online)) - Number(Boolean(a.is_online));
+        if (onlineDiff !== 0) return onlineDiff;
+        const roomDiff = Number(Boolean(b.activeRoomRaw)) - Number(Boolean(a.activeRoomRaw));
+        if (roomDiff !== 0) return roomDiff;
+        return String(a.username).localeCompare(String(b.username));
+      });
+  }
+
+  const sql = getSql();
+  const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const rows = await sql`
+    SELECT
+      u.*,
+      (
+        u.is_banned = FALSE
+        AND EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.user_id = u.id
+            AND s.revoked_at IS NULL
+            AND s.expires_at > NOW()
+            AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+        )
+      ) AS is_online,
+      COALESCE(
+        (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+        u.last_login_at
+      ) AS last_seen_at
+    FROM friendships f
+    JOIN users u ON u.id = f.friend_id
+    WHERE f.user_id = ${userId}
+      AND u.is_banned = FALSE
+  `;
+
+  if (rows.length === 0) return [];
+  const roomMap = await getActiveRoomMapForUsers(rows.map((r) => r.id));
+  return rows
+    .map((r) => ({
+      ...normalizeUserRow(r),
+      activeRoomRaw: roomMap.get(r.id) || null,
+    }))
+    .sort((a, b) => {
+      const onlineDiff = Number(Boolean(b.is_online)) - Number(Boolean(a.is_online));
+      if (onlineDiff !== 0) return onlineDiff;
+      const roomDiff = Number(Boolean(b.activeRoomRaw)) - Number(Boolean(a.activeRoomRaw));
+      if (roomDiff !== 0) return roomDiff;
+      return String(a.username).localeCompare(String(b.username));
+    });
+}
+
+export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit = 10 }) {
+  await ensureSchema();
+  const safeLimit = Math.min(10, Math.max(1, Math.trunc(Number(limit) || 10)));
+  const cleanSearch = String(search || '').trim().toLowerCase();
+
+  if (isMemoryMode()) {
+    const nowMs = Date.now();
+    const fMap = mem.friendships.get(viewerUserId) || new Map();
+    let list = Array.from(mem.users.values()).filter((u) => !u.is_banned);
+
+    if (cleanSearch) {
+      const rankMatch = (u) => {
+        const uname = u.username_lower || '';
+        const dname = String(u.display_name || '').toLowerCase();
+        if (uname === cleanSearch || dname === cleanSearch) return 0;
+        if (uname.startsWith(cleanSearch) || dname.startsWith(cleanSearch)) return 1;
+        return 2;
+      };
+      list = list
+        .filter((u) => {
+          const uname = u.username_lower || '';
+          const dname = String(u.display_name || '').toLowerCase();
+          return uname.includes(cleanSearch) || dname.includes(cleanSearch);
+        })
+        .sort((a, b) => {
+          const rankDiff = rankMatch(a) - rankMatch(b);
+          if (rankDiff !== 0) return rankDiff;
+          const winsDiff = Number(b.total_wins ?? 0) - Number(a.total_wins ?? 0);
+          if (winsDiff !== 0) return winsDiff;
+          const coinsDiff = Number(b.coins ?? 0) - Number(a.coins ?? 0);
+          if (coinsDiff !== 0) return coinsDiff;
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        });
+    } else {
+      list.sort((a, b) => {
+        const winsDiff = Number(b.total_wins ?? 0) - Number(a.total_wins ?? 0);
+        if (winsDiff !== 0) return winsDiff;
+        const coinsDiff = Number(b.coins ?? 0) - Number(a.coins ?? 0);
+        if (coinsDiff !== 0) return coinsDiff;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+    }
+
+    const sliced = list.slice(0, safeLimit);
+    const roomMap = await getActiveRoomMapForUsers(sliced.map((u) => u.id));
+    return sliced.map((u) => {
+      const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
+      return {
+        ...normalizeUserRow({ ...u, ...presence }),
+        isFriend: fMap.has(u.id),
+        isSelf: u.id === viewerUserId,
+        activeRoomRaw: roomMap.get(u.id) || null,
+      };
+    });
+  }
+
+  const sql = getSql();
+  const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const like = `%${escapeLikePattern(cleanSearch)}%`;
+  const prefixLike = `${escapeLikePattern(cleanSearch)}%`;
+
+  const rows = cleanSearch
+    ? await sql`
+        SELECT
+          u.*,
+          (
+            u.is_banned = FALSE
+            AND EXISTS (
+              SELECT 1 FROM sessions s
+              WHERE s.user_id = u.id
+                AND s.revoked_at IS NULL
+                AND s.expires_at > NOW()
+                AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+            )
+          ) AS is_online,
+          COALESCE(
+            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+            u.last_login_at
+          ) AS last_seen_at,
+          EXISTS (
+            SELECT 1 FROM friendships f
+            WHERE f.user_id = ${viewerUserId} AND f.friend_id = u.id
+          ) AS is_friend
+        FROM users u
+        WHERE u.is_banned = FALSE
+          AND (u.username_lower LIKE ${like} ESCAPE '!' OR LOWER(u.display_name) LIKE ${like} ESCAPE '!')
+        ORDER BY
+          CASE
+            WHEN u.username_lower = ${cleanSearch} OR LOWER(u.display_name) = ${cleanSearch} THEN 0
+            WHEN u.username_lower LIKE ${prefixLike} ESCAPE '!' OR LOWER(u.display_name) LIKE ${prefixLike} ESCAPE '!' THEN 1
+            ELSE 2
+          END ASC,
+          u.total_wins DESC,
+          u.coins DESC,
+          u.created_at ASC
+        LIMIT ${safeLimit}
+      `
+    : await sql`
+        SELECT
+          u.*,
+          (
+            u.is_banned = FALSE
+            AND EXISTS (
+              SELECT 1 FROM sessions s
+              WHERE s.user_id = u.id
+                AND s.revoked_at IS NULL
+                AND s.expires_at > NOW()
+                AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+            )
+          ) AS is_online,
+          COALESCE(
+            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+            u.last_login_at
+          ) AS last_seen_at,
+          EXISTS (
+            SELECT 1 FROM friendships f
+            WHERE f.user_id = ${viewerUserId} AND f.friend_id = u.id
+          ) AS is_friend
+        FROM users u
+        WHERE u.is_banned = FALSE
+        ORDER BY u.total_wins DESC, u.coins DESC, u.created_at ASC
+        LIMIT ${safeLimit}
+      `;
+
+  if (rows.length === 0) return [];
+  const roomMap = await getActiveRoomMapForUsers(rows.map((r) => r.id));
+  return rows.map((r) => ({
+    ...normalizeUserRow(r),
+    isFriend: Boolean(r.is_friend),
+    isSelf: r.id === viewerUserId,
+    activeRoomRaw: roomMap.get(r.id) || null,
+  }));
 }

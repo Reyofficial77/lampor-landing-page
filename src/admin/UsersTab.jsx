@@ -11,6 +11,26 @@ import {
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,24}$/
 
+function OnlineBadge({ isOnline, lastSeenAt }) {
+  const statusLabel = isOnline ? 'ONLINE' : 'OFFLINE'
+  const detailText = isOnline
+    ? 'Aktif baru saja'
+    : lastSeenAt
+      ? `Terakhir terlihat: ${formatTimestamp(lastSeenAt)}`
+      : 'Belum pernah terlihat online'
+
+  return (
+    <span
+      className={`presence-badge ${isOnline ? 'online' : 'offline'}`}
+      title={detailText}
+      aria-label={`${statusLabel} (${detailText})`}
+    >
+      <span className="presence-badge__dot" aria-hidden="true" />
+      <span>{statusLabel}</span>
+    </span>
+  )
+}
+
 function validatePassword(pwd) {
   if (pwd.length < 8 || pwd.length > 72) {
     return 'Kata sandi harus terdiri dari 8 hingga 72 karakter.'
@@ -339,6 +359,8 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
               }}
             >
               <option value="all">Semua Akun</option>
+              <option value="online">Sedang Online</option>
+              <option value="offline">Offline</option>
               <option value="active">Aktif</option>
               <option value="verified">Terverifikasi</option>
               <option value="banned">Diblokir (Ban)</option>
@@ -372,7 +394,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
         <section className="admin-state-box" role="alert">
           <h3>Gagal Memuat Akun Pemain</h3>
           <p>{error}</p>
-          <button type="button" className="admin-btn admin-btn--primary" onClick={loadUsers}>
+          <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadUsers(false)}>
             Coba Lagi
           </button>
         </section>
@@ -418,17 +440,18 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                       : false
                   return (
                     <tr key={u.id || u.username}>
-                      <td>
-                        <div>
+                      <td data-label="Akun & Status">
+                        <div className="user-identity-head">
                           <strong>{u.username}</strong>
-                          {u.isVerified && <VerifiedBadge />}{' '}
+                          {u.isVerified && <VerifiedBadge />}
+                          <OnlineBadge isOnline={u.isOnline} lastSeenAt={u.lastSeenAt} />
                           <span
                             className={`admin-tag ${
                               u.role === 'admin' ? 'admin-tag--brass' : ''
                             }`}
                           >
                             {u.role}
-                          </span>{' '}
+                          </span>
                           {u.isBanned ? (
                             <span className="admin-tag admin-tag--crimson">DIBLOKIR</span>
                           ) : (
@@ -436,18 +459,25 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                           )}
                           {locked && <span className="admin-tag admin-tag--brass">TERKUNCI</span>}
                         </div>
+                        <div className="admin-field__hint">
+                          {u.isOnline
+                            ? 'Aktif baru saja'
+                            : u.lastSeenAt
+                              ? `Terakhir online: ${formatTimestamp(u.lastSeenAt)}`
+                              : 'Terakhir online: Belum pernah'}
+                        </div>
                         {u.id && <div className="admin-field__hint mono-chip">{u.id}</div>}
                         {u.isBanned && u.banReason && (
                           <p className="admin-field__hint">Alasan: {u.banReason}</p>
                         )}
                       </td>
-                      <td>
+                      <td data-label="Progres Game">
                         <div>Koin: {u.coins.toLocaleString('id-ID')}</div>
                         <div className="admin-field__hint">
                           Menang: {u.totalWins} | Nyawa Tambahan: {u.extraLives}
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Login Terakhir">
                         <div>{formatTimestamp(u.lastLoginAt)}</div>
                         <div className="admin-field__hint">
                           {u.lastLoginIp ? (
@@ -457,7 +487,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                           )}
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Tindakan Admin">
                         <div className="admin-row-actions">
                           <button
                             type="button"

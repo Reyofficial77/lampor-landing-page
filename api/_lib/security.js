@@ -677,6 +677,8 @@ export function serializeAdminUserRow(user) {
     lockedUntil: user.locked_until ? new Date(user.locked_until).toISOString() : null,
     lastLoginIp: user.last_login_ip || '',
     updatedAt: user.updated_at ? new Date(user.updated_at).toISOString() : null,
+    isOnline: Boolean(user.is_online),
+    lastSeenAt: user.last_seen_at ? new Date(user.last_seen_at).toISOString() : null,
   };
 }
 
@@ -713,8 +715,63 @@ export function serializeRoom(room, players = [], hostUsername = '') {
     settings: sanitizeDeepValue(room.settings || {}) || {},
     announcement: censorProfanity(sanitizeText(room.announcement || '', 240)),
     lastEventSeq: Number(room.last_event_seq ?? 0),
+    currentAct: room.status === 'playing' ? Math.max(1, Number(room.world_state?.act ?? 1)) : 0,
+    furnaceBurning: Boolean(room.world_state?.furnaceBurning),
     createdAt: room.created_at ? new Date(room.created_at).toISOString() : null,
     lastActivityAt: room.last_activity_at ? new Date(room.last_activity_at).toISOString() : null,
+  };
+}
+
+export function serializeActiveRoomSummary(roomInfo, { isFriend = false } = {}) {
+  if (!roomInfo) return null;
+  const currentAct =
+    roomInfo.status === 'playing' ? Math.max(1, Number(roomInfo.world_state?.act ?? 1)) : 0;
+  const furnaceBurning = Boolean(roomInfo.world_state?.furnaceBurning);
+  const isAct3Blocked = roomInfo.status === 'playing' && (currentAct >= 3 || furnaceBurning);
+  const playerCount = Number(roomInfo.playerCount || 0);
+  const canJoin =
+    playerCount < Number(roomInfo.max_players || 5) &&
+    !isAct3Blocked &&
+    (isFriend || roomInfo.status === 'lobby' || Boolean(roomInfo.allow_late_join));
+
+  return {
+    id: roomInfo.id,
+    roomCode: roomInfo.room_code,
+    name: censorProfanity(sanitizeText(roomInfo.name, 60)),
+    mode: roomInfo.mode,
+    status: roomInfo.status,
+    difficulty: roomInfo.difficulty,
+    playerCount,
+    maxPlayers: Number(roomInfo.max_players ?? 4),
+    hasPassword: Boolean(roomInfo.password_hash),
+    allowLateJoin: Boolean(roomInfo.allow_late_join),
+    currentAct,
+    furnaceBurning,
+    canJoin,
+  };
+}
+
+export function serializePublicPlayerCard(
+  user,
+  { isFriend = false, isSelf = false, activeRoom = null } = {}
+) {
+  const cleanUsername = censorProfanity(user.username || '');
+  const cleanDisplayName = censorProfanity(
+    sanitizeProfileText(user.display_name || '', 32, false)
+  );
+  return {
+    id: user.id,
+    username: cleanUsername,
+    displayName: cleanDisplayName || cleanUsername,
+    avatarUrl: sanitizeAvatarUrl(user.avatar_url || '') ?? '',
+    isVerified: Boolean(user.is_verified),
+    totalWins: Math.max(0, Number(user.total_wins ?? 0)),
+    coins: Math.min(999999999, Math.max(0, Number(user.coins ?? 0))),
+    isOnline: Boolean(user.is_online),
+    lastSeenAt: user.last_seen_at ? new Date(user.last_seen_at).toISOString() : null,
+    isFriend: Boolean(isFriend),
+    isSelf: Boolean(isSelf),
+    activeRoom,
   };
 }
 

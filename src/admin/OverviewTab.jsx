@@ -126,7 +126,7 @@ export default function OverviewTab({ refreshTick, autoTick, onNotify, onUnautho
       <section className="admin-state-box" role="alert">
         <h2>Gagal Memuat Ringkasan Server</h2>
         <p>{error}</p>
-        <button type="button" className="admin-btn admin-btn--primary" onClick={loadData}>
+        <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadData(false)}>
           Coba Muat Ulang
         </button>
       </section>
@@ -141,7 +141,7 @@ export default function OverviewTab({ refreshTick, autoTick, onNotify, onUnautho
           Server tidak mengembalikan objek statistik ringkasan. Tekan tombol di bawah untuk
           meminta data ulang dari endpoint ringkasan.
         </p>
-        <button type="button" className="admin-btn admin-btn--primary" onClick={loadData}>
+        <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadData(false)}>
           Ambil Ulang Ringkasan
         </button>
       </section>
@@ -189,6 +189,17 @@ export default function OverviewTab({ refreshTick, autoTick, onNotify, onUnautho
           </div>
 
           <dl className="overview-ledger">
+            <div className="overview-ledger__row overview-ledger__row--highlight">
+              <dt>
+                <span className="presence-badge__dot presence-badge__dot--online" aria-hidden="true" />
+                <span>Pemain Online</span>
+              </dt>
+              <dd>{stats.onlineUsers ?? 0}</dd>
+            </div>
+            <div className="overview-ledger__row">
+              <dt>Sesi Login Aktif</dt>
+              <dd>{stats.activeSessions ?? 0}</dd>
+            </div>
             <div className="overview-ledger__row">
               <dt>Total Akun Pemain</dt>
               <dd>{stats.totalUsers ?? 0}</dd>
@@ -196,10 +207,6 @@ export default function OverviewTab({ refreshTick, autoTick, onNotify, onUnautho
             <div className="overview-ledger__row">
               <dt>Akun Diblokir</dt>
               <dd>{stats.bannedUsers ?? 0}</dd>
-            </div>
-            <div className="overview-ledger__row">
-              <dt>Sesi Login Aktif</dt>
-              <dd>{stats.activeSessions ?? 0}</dd>
             </div>
             <div className="overview-ledger__row">
               <dt>Alamat IP Terblokir</dt>

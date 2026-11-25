@@ -4,6 +4,7 @@ import healthHandler from './api/health.js';
 import authHandler from './api/auth/[action].js';
 import roomsHandler from './api/rooms/[action].js';
 import adminHandler from './api/admin/[action].js';
+import friendsHandler from './api/friends/[action].js';
 import redeemHandler from './api/redeem.js';
 import { applySecurityHeaders, applyCorsHeaders } from './api/_lib/security.js';
 
@@ -73,6 +74,13 @@ export function createApiServer() {
       if (adminMatch) {
         req.query.action = decodeURIComponent(adminMatch[1]);
         await adminHandler(req, res);
+        return;
+      }
+
+      const friendsMatch = /^\/api\/friends\/([^/]+)$/.exec(pathname);
+      if (friendsMatch) {
+        req.query.action = decodeURIComponent(friendsMatch[1]);
+        await friendsHandler(req, res);
         return;
       }
 

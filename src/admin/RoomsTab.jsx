@@ -9,6 +9,8 @@ import {
   useDialogController,
 } from './adminApi'
 
+const ACT_ROMAN = { 1: 'I', 2: 'II', 3: 'III' }
+
 export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthorized }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -192,7 +194,7 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
             </select>
           </div>
 
-          <button type="button" className="admin-btn" onClick={loadRooms}>
+          <button type="button" className="admin-btn" onClick={() => loadRooms(false)}>
             Muat Ulang Room
           </button>
         </div>
@@ -207,7 +209,7 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
         <section className="admin-state-box" role="alert">
           <h3>Gagal Memuat Daftar Room</h3>
           <p>{error}</p>
-          <button type="button" className="admin-btn admin-btn--primary" onClick={loadRooms}>
+          <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadRooms(false)}>
             Coba Lagi
           </button>
         </section>
@@ -224,7 +226,7 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
               Tampilkan Semua Mode
             </button>
           ) : (
-            <button type="button" className="admin-btn admin-btn--primary" onClick={loadRooms}>
+            <button type="button" className="admin-btn admin-btn--primary" onClick={() => loadRooms(false)}>
               Segarkan Daftar Room
             </button>
           )}
@@ -234,7 +236,7 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
           {filteredRooms.map((room) => (
             <article className="room-card" key={room.id || room.roomCode}>
               <div className="room-card__head">
-                <div>
+                <div className="room-card__info">
                   <h3>
                     {room.name} <span className="mono-chip">{room.roomCode}</span>
                   </h3>
@@ -253,6 +255,16 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     >
                       {room.status.toUpperCase()}
                     </span>
+                    {room.status === 'playing' && room.currentAct > 0 && (
+                      <span className="admin-tag admin-tag--brass">
+                        BABAK {ACT_ROMAN[room.currentAct] || room.currentAct}
+                      </span>
+                    )}
+                    {room.status === 'playing' && (room.currentAct >= 3 || room.furnaceBurning) && (
+                      <span className="admin-tag admin-tag--crimson">
+                        Masuk Terkunci · Babak III
+                      </span>
+                    )}
                     <span className="admin-tag">{room.difficulty}</span>
                     <span className="admin-tag">
                       Pemain: {room.players.length || room.playerCount}/{room.maxPlayers}
@@ -298,10 +310,10 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                 ) : (
                   room.players.map((p) => (
                     <div className="room-player-row" key={p.userId || p.username}>
-                      <div>
+                      <div className="room-player-row__identity">
                         <strong>{p.username}</strong>
-                        {p.isVerified && <VerifiedBadge size={14} />}{' '}
-                        {p.isHost && <span className="admin-tag admin-tag--brass">HOST</span>}{' '}
+                        {p.isVerified && <VerifiedBadge size={14} />}
+                        {p.isHost && <span className="admin-tag admin-tag--brass">HOST</span>}
                         <span className={`admin-tag ${p.isReady ? 'admin-tag--sage' : ''}`}>
                           {p.isReady ? 'SIAP' : 'MENUNGGU'}
                         </span>

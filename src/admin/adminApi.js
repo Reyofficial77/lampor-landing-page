@@ -281,6 +281,8 @@ export function normalizeUser(raw = {}) {
     failedLoginAttempts: Number(raw.failedLoginAttempts ?? raw.failed_login_attempts ?? 0),
     lockedUntil: raw.lockedUntil ?? raw.locked_until ?? null,
     lastLoginIp: raw.lastLoginIp ?? raw.last_login_ip ?? '',
+    isOnline: Boolean(raw.isOnline ?? raw.is_online ?? false),
+    lastSeenAt: raw.lastSeenAt ?? raw.last_seen_at ?? null,
     createdAt: raw.createdAt ?? raw.created_at ?? null,
     lastLoginAt: raw.lastLoginAt ?? raw.last_login_at ?? null,
   }
@@ -294,6 +296,8 @@ export function normalizeRoom(raw = {}) {
     name: raw.name ?? 'Room Tanpa Nama',
     mode: raw.mode ?? 'multiplayer',
     status: raw.status ?? 'lobby',
+    currentAct: Number(raw.currentAct ?? raw.current_act ?? 0),
+    furnaceBurning: Boolean(raw.furnaceBurning ?? raw.furnace_burning ?? false),
     difficulty: raw.difficulty ?? 'normal',
     maxPlayers: Number(raw.maxPlayers ?? raw.max_players ?? 4),
     playerCount: Number(raw.playerCount ?? raw.player_count ?? players.length),
