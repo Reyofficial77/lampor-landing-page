@@ -38,6 +38,9 @@ const createRoomSchema = z.strictObject({
   difficulty: z.string().min(1).max(24).default('normal'),
   canUseShopItems: z.boolean().default(true),
   allowLateJoin: z.boolean().optional(),
+  friendsOnly: z.boolean().optional(),
+  startImmediately: z.boolean().optional(),
+  initialWorldState: z.record(z.string(), z.unknown()).optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -184,6 +187,11 @@ export default async function handler(req, res) {
         ? hashPassword(parsed.data.password)
         : null;
 
+    const roomSettings = sanitizeDeepValue(parsed.data.settings || {}) || {};
+    if (parsed.data.friendsOnly) {
+      roomSettings.friendsOnly = true;
+    }
+
     const created = await db.createRoom({
       roomCode,
       name: cleanName,
@@ -195,7 +203,9 @@ export default async function handler(req, res) {
       passwordHash,
       canUseShopItems: parsed.data.canUseShopItems,
       allowLateJoin: Boolean(parsed.data.allowLateJoin),
-      settings: sanitizeDeepValue(parsed.data.settings || {}) || {},
+      settings: roomSettings,
+      initialStatus: parsed.data.startImmediately ? 'playing' : 'lobby',
+      initialWorldState: parsed.data.initialWorldState || {},
     });
 
     return sendJson(res, 201, {
@@ -241,6 +251,19 @@ export default async function handler(req, res) {
           error: 'Tidak dapat bergabung saat Babak III sedang berlangsung.',
           code: 'ACT_3_JOIN_BLOCKED',
         });
+      }
+      if (Boolean(room.settings?.friendsOnly)) {
+        const isFriend = await db.hasFriendInUserIds(
+          auth.user.id,
+          currentPlayers.map((p) => p.user_id)
+        );
+        if (!isFriend) {
+          return sendJson(res, 403, {
+            ok: false,
+            error: 'Room ini hanya dapat digabungi oleh teman.',
+            code: 'FRIENDS_ONLY_ROOM',
+          });
+        }
       }
       if (!room.allow_late_join) {
         const isFriend = await db.hasFriendInUserIds(

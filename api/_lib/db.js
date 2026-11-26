@@ -12,6 +12,7 @@ import {
 } from './security.js';
 
 export const ONLINE_WINDOW_MS = 45_000;
+export const PLAYER_SESSION_RENEW_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 export function isDashboardOnlyAdminUsername(username) {
   const lower = String(username || '').trim().toLowerCase();
@@ -1172,7 +1173,15 @@ export async function getSessionWithUser(tokenHash, expectedType = null) {
     if (expectedType && session.session_type !== expectedType) return null;
     const user = mem.users.get(session.user_id);
     if (!user) return null;
-    session.last_seen_at = new Date();
+    const now = new Date();
+    session.last_seen_at = now;
+    if (session.session_type === 'player') {
+      const nextExpMs = Math.max(
+        new Date(session.expires_at).getTime(),
+        now.getTime() + PLAYER_SESSION_RENEW_TTL_MS
+      );
+      session.expires_at = new Date(nextExpMs);
+    }
     return { session: { ...session }, user: normalizeUserRow(user) };
   }
 
@@ -1208,14 +1217,29 @@ export async function getSessionWithUser(tokenHash, expectedType = null) {
 
   if (!rows[0]) return null;
   const r = rows[0];
-  await sql`UPDATE sessions SET last_seen_at = NOW() WHERE id = ${r.s_id}`;
+  let effectiveExpiresAt = r.s_expires_at;
+  if (r.s_session_type === 'player') {
+    const renewedIso = new Date(Date.now() + PLAYER_SESSION_RENEW_TTL_MS).toISOString();
+    const updRows = await sql`
+      UPDATE sessions
+      SET last_seen_at = NOW(),
+          expires_at = GREATEST(expires_at, ${renewedIso}::timestamptz)
+      WHERE id = ${r.s_id}
+      RETURNING expires_at
+    `;
+    if (updRows[0]?.expires_at) {
+      effectiveExpiresAt = updRows[0].expires_at;
+    }
+  } else {
+    await sql`UPDATE sessions SET last_seen_at = NOW() WHERE id = ${r.s_id}`;
+  }
   const session = {
     id: r.s_id,
     user_id: r.s_user_id,
     token_hash: r.s_token_hash,
     session_type: r.s_session_type,
     csrf_token: r.s_csrf_token,
-    expires_at: r.s_expires_at,
+    expires_at: effectiveExpiresAt,
     revoked_at: r.s_revoked_at,
   };
   return { session, user: normalizeUserRow(r) };
@@ -2011,7 +2035,12 @@ export async function listActiveRooms(mode = 'all') {
   await ensureSchema();
   if (isMemoryMode()) {
     const rooms = Array.from(mem.rooms.values())
-      .filter((r) => (r.status === 'lobby' || r.status === 'playing') && (mode === 'all' || r.mode === mode))
+      .filter(
+        (r) =>
+          (r.status === 'lobby' || r.status === 'playing') &&
+          (mode === 'all' || r.mode === mode) &&
+          !r.settings?.friendsOnly
+      )
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     return rooms.map((r) => ({
       room: normalizeRoomRow(r),
@@ -2025,12 +2054,15 @@ export async function listActiveRooms(mode = 'all') {
       ? await sql`
           SELECT * FROM rooms
           WHERE status IN ('lobby', 'playing')
+            AND COALESCE((settings->>'friendsOnly')::boolean, FALSE) = FALSE
           ORDER BY created_at DESC
           LIMIT 100
         `
       : await sql`
           SELECT * FROM rooms
-          WHERE status IN ('lobby', 'playing') AND mode = ${mode}
+          WHERE status IN ('lobby', 'playing')
+            AND mode = ${mode}
+            AND COALESCE((settings->>'friendsOnly')::boolean, FALSE) = FALSE
           ORDER BY created_at DESC
           LIMIT 100
         `;
@@ -2056,11 +2088,15 @@ export async function createRoom({
   canUseShopItems,
   allowLateJoin,
   settings,
+  initialStatus = 'lobby',
+  initialWorldState = {},
 }) {
   await ensureSchema();
   const id = crypto.randomUUID();
   const cleanName = sanitizeText(name, 60);
   const cleanSettings = sanitizeDeepValue(settings) || {};
+  const cleanWorldState = sanitizeDeepValue(initialWorldState) || {};
+  const resolvedStatus = initialStatus === 'playing' ? 'playing' : 'lobby';
 
   if (isMemoryMode()) {
     const now = new Date();
@@ -2070,14 +2106,14 @@ export async function createRoom({
       name: cleanName,
       host_user_id: hostUserId,
       mode,
-      status: 'lobby',
+      status: resolvedStatus,
       difficulty,
       max_players: maxPlayers,
       password_hash: passwordHash || null,
       can_use_shop_items: Boolean(canUseShopItems),
       allow_late_join: Boolean(allowLateJoin),
       settings: cleanSettings,
-      world_state: {},
+      world_state: cleanWorldState,
       last_event_seq: 0,
       announcement: '',
       created_at: now,
@@ -2104,11 +2140,11 @@ export async function createRoom({
   const roomRows = await sql`
     INSERT INTO rooms (
       id, room_code, name, host_user_id, mode, status, difficulty,
-      max_players, password_hash, can_use_shop_items, allow_late_join, settings
+      max_players, password_hash, can_use_shop_items, allow_late_join, settings, world_state
     ) VALUES (
-      ${id}, ${roomCode}, ${cleanName}, ${hostUserId}, ${mode}, 'lobby', ${difficulty},
+      ${id}, ${roomCode}, ${cleanName}, ${hostUserId}, ${mode}, ${resolvedStatus}, ${difficulty},
       ${maxPlayers}, ${passwordHash || null}, ${Boolean(canUseShopItems)}, ${Boolean(allowLateJoin)},
-      ${JSON.stringify(cleanSettings)}::jsonb
+      ${JSON.stringify(cleanSettings)}::jsonb, ${JSON.stringify(cleanWorldState)}::jsonb
     )
     RETURNING *
   `;

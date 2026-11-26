@@ -1779,3 +1779,123 @@ test('POST /api/rooms/sync relays valid voice events up to 8192 base64 chars and
   assert.equal(voiceEvents[1].payload.sr, 16000);
   assert.equal(voiceEvents[1].payload.rms, 1);
 });
+
+test('Sliding player session TTL and friends-only singleplayer joinable rooms (with Babak 3 lock)', async () => {
+  const soloHost = await registerPlayer('SoloHostFriend', 'SoloPass123', '10.0.13.1');
+  const bestFriend = await registerPlayer('BestFriendUser', 'SoloPass123', '10.0.13.2');
+  const outsider = await registerPlayer('OutsiderUser', 'SoloPass123', '10.0.13.3');
+  assert.equal(soloHost.status, 201);
+  assert.equal(bestFriend.status, 201);
+  assert.equal(outsider.status, 201);
+
+  // Verify sliding player session renewal via db.getSessionWithUser
+  const modDb = await import('../api/_lib/db.js');
+  const modSec = await import('../api/_lib/security.js');
+  const foundBefore = await modDb.getSessionWithUser(modSec.hashToken(soloHost.json.token), 'player');
+  assert.ok(foundBefore);
+  const expMs = new Date(foundBefore.session.expires_at).getTime();
+  assert.ok(expMs > Date.now() + 170 * 24 * 60 * 60 * 1000);
+
+  // Make soloHost <-> bestFriend mutual friends
+  const addReq = await api('/api/friends/add', {
+    method: 'POST',
+    token: bestFriend.json.token,
+    ip: '10.0.13.2',
+    body: { username: soloHost.json.user.username },
+  });
+  assert.equal(addReq.status, 200);
+  const accReq = await api('/api/friends/accept', {
+    method: 'POST',
+    token: soloHost.json.token,
+    ip: '10.0.13.1',
+    body: { requesterUserId: bestFriend.json.user.id },
+  });
+  assert.equal(accReq.status, 200);
+
+  // SoloHost opens singleplayer for friends (friendsOnly + startImmediately)
+  const spRoomRes = await api('/api/rooms/create', {
+    method: 'POST',
+    token: soloHost.json.token,
+    ip: '10.0.13.1',
+    body: {
+      name: 'Solo SoloHostFriend',
+      mode: 'multiplayer',
+      maxPlayers: 4,
+      difficulty: 'normal',
+      canUseShopItems: true,
+      allowLateJoin: true,
+      friendsOnly: true,
+      startImmediately: true,
+      initialWorldState: { act: 1, furnaceBurning: false, hour: 1, minute: 5 },
+    },
+  });
+  assert.equal(spRoomRes.status, 201);
+  assert.equal(spRoomRes.json.room.status, 'playing');
+  const spRoomId = spRoomRes.json.room.id;
+
+  // Must NOT appear in public multiplayer server list
+  const publicRooms = await api('/api/rooms/list?mode=all', {
+    token: outsider.json.token,
+    ip: '10.0.13.3',
+  });
+  assert.equal(publicRooms.status, 200);
+  assert.equal(publicRooms.json.rooms.some((r) => r.id === spRoomId), false);
+
+  // Must appear in mutual friend's /api/friends/list with canJoin: true
+  const bfFriends = await api('/api/friends/list', {
+    token: bestFriend.json.token,
+    ip: '10.0.13.2',
+  });
+  assert.equal(bfFriends.status, 200);
+  const hostCard = bfFriends.json.friends.find((f) => f.id === soloHost.json.user.id);
+  assert.ok(hostCard?.activeRoom);
+  assert.equal(hostCard.activeRoom.id, spRoomId);
+  assert.equal(hostCard.activeRoom.canJoin, true);
+
+  // Outsider (non-friend) is rejected with 403 FRIENDS_ONLY_ROOM
+  const outsiderJoin = await api('/api/rooms/join', {
+    method: 'POST',
+    token: outsider.json.token,
+    ip: '10.0.13.3',
+    body: { roomId: spRoomId },
+  });
+  assert.equal(outsiderJoin.status, 403);
+  assert.equal(outsiderJoin.json.code, 'FRIENDS_ONLY_ROOM');
+
+  // Mutual friend joins cleanly in Act 1
+  const friendJoin = await api('/api/rooms/join', {
+    method: 'POST',
+    token: bestFriend.json.token,
+    ip: '10.0.13.2',
+    body: { roomId: spRoomId },
+  });
+  assert.equal(friendJoin.status, 200);
+
+  // Advance room to Babak 3 via host sync -> new joiners are blocked (409 ACT_3_JOIN_BLOCKED)
+  await api('/api/rooms/leave', {
+    method: 'POST',
+    token: bestFriend.json.token,
+    ip: '10.0.13.2',
+    body: { roomId: spRoomId },
+  });
+  const syncAct3 = await api('/api/rooms/sync', {
+    method: 'POST',
+    token: soloHost.json.token,
+    ip: '10.0.13.1',
+    body: {
+      roomId: spRoomId,
+      lastEventSeq: 0,
+      worldState: { act: 3, furnaceBurning: true, hour: 3, minute: 30 },
+    },
+  });
+  assert.equal(syncAct3.status, 200);
+
+  const friendJoinAct3 = await api('/api/rooms/join', {
+    method: 'POST',
+    token: bestFriend.json.token,
+    ip: '10.0.13.2',
+    body: { roomId: spRoomId },
+  });
+  assert.equal(friendJoinAct3.status, 409);
+  assert.equal(friendJoinAct3.json.code, 'ACT_3_JOIN_BLOCKED');
+});

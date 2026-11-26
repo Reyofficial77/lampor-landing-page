@@ -58,7 +58,7 @@ const profileSchema = z.strictObject({
   avatarFilename: z.string().max(128).optional(),
 });
 
-const PLAYER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const PLAYER_SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 export default async function handler(req, res) {
   const action = getRouteAction(req);

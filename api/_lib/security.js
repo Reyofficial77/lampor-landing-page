@@ -729,7 +729,7 @@ export function serializeActiveRoomSummary(roomInfo, { isFriend = false } = {}) 
   const isAct3Blocked = roomInfo.status === 'playing' && (currentAct >= 3 || furnaceBurning);
   const playerCount = Number(roomInfo.playerCount || 0);
   const canJoin =
-    playerCount < Number(roomInfo.max_players || 5) &&
+    playerCount < Number(roomInfo.max_players || 4) &&
     !isAct3Blocked &&
     (isFriend || roomInfo.status === 'lobby' || Boolean(roomInfo.allow_late_join));
 
@@ -744,6 +744,7 @@ export function serializeActiveRoomSummary(roomInfo, { isFriend = false } = {}) 
     maxPlayers: Number(roomInfo.max_players ?? 4),
     hasPassword: Boolean(roomInfo.password_hash),
     allowLateJoin: Boolean(roomInfo.allow_late_join),
+    friendsOnly: Boolean(roomInfo.settings?.friendsOnly),
     currentAct,
     furnaceBurning,
     canJoin,
