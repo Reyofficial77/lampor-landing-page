@@ -92,6 +92,14 @@ export default async function handler(req, res) {
       });
     }
 
+    if (db.isDashboardOnlyAdminUsername(parsed.data.username)) {
+      return sendJson(res, 403, {
+        ok: false,
+        error: 'Akun ini khusus akses Admin Dashboard dan tidak dapat dimainkan di dalam game.',
+        code: 'ADMIN_DASHBOARD_ONLY',
+      });
+    }
+
     if (containsProfanity(parsed.data.username)) {
       return sendJson(res, 400, {
         ok: false,
@@ -199,6 +207,14 @@ export default async function handler(req, res) {
         details: { reason: pow.reason },
       });
       return sendJson(res, 400, { ok: false, error: pow.reason, code: 'INVALID_POW' });
+    }
+
+    if (db.isDashboardOnlyAdminUsername(parsed.data.username)) {
+      return sendJson(res, 403, {
+        ok: false,
+        error: 'Akun ini khusus akses Admin Dashboard dan tidak dapat dimainkan di dalam game.',
+        code: 'ADMIN_DASHBOARD_ONLY',
+      });
     }
 
     const user = await db.findUserByUsername(parsed.data.username);

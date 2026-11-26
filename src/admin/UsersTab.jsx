@@ -336,12 +336,15 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
 
         <form className="admin-toolbar" onSubmit={handleSearchSubmit}>
           <div className="admin-field admin-toolbar__grow">
-            <label htmlFor="users-search">Cari Username atau ID</label>
+            <label htmlFor="users-search">Cari Username</label>
             <input
               id="users-search"
               type="search"
               className="admin-input"
               placeholder="Ketik username pemain..."
+              spellCheck={false}
+              autoCapitalize="none"
+              autoCorrect="off"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />
@@ -404,7 +407,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
           <p>
             {hasFilters
               ? 'Pencarian atau filter status saat ini tidak menemukan akun. Ubah kata kunci atau reset filter untuk melihat seluruh akun.'
-              : 'Basis data pengguna belum memiliki akun selain administrator saat ini. Buat akun baru untuk menguji akses pemain.'}
+              : 'Daftar ini hanya menampilkan akun pemain yang dapat masuk ke dalam game (akun operator admin_lampor khusus untuk konsol web ini dan tidak dapat dipakai bermain). Buat akun pertama untuk menguji akses pemain.'}
           </p>
           {hasFilters ? (
             <button type="button" className="admin-btn" onClick={handleResetFilters}>
@@ -466,7 +469,6 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                               ? `Terakhir online: ${formatTimestamp(u.lastSeenAt)}`
                               : 'Terakhir online: Belum pernah'}
                         </div>
-                        {u.id && <div className="admin-field__hint mono-chip">{u.id}</div>}
                         {u.isBanned && u.banReason && (
                           <p className="admin-field__hint">Alasan: {u.banReason}</p>
                         )}
@@ -480,11 +482,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                       <td data-label="Login Terakhir">
                         <div>{formatTimestamp(u.lastLoginAt)}</div>
                         <div className="admin-field__hint">
-                          {u.lastLoginIp ? (
-                            <span className="mono-chip">{u.lastLoginIp}</span>
-                          ) : (
-                            `Dibuat ${formatTimestamp(u.createdAt)}`
-                          )}
+                          Dibuat {formatTimestamp(u.createdAt)}
                         </div>
                       </td>
                       <td data-label="Tindakan Admin">
@@ -612,6 +610,10 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     id="modal-create-username"
                     type="text"
                     className="admin-input"
+                    autoComplete="off"
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    autoCorrect="off"
                     placeholder="Contoh: warga_desa01"
                     value={modalForm.username || ''}
                     onChange={(e) => setModalForm({ ...modalForm, username: e.target.value })}
@@ -625,6 +627,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     id="modal-create-password"
                     type="password"
                     className="admin-input"
+                    autoComplete="new-password"
                     placeholder="Minimal 8 karakter dengan huruf & angka"
                     value={modalForm.password || ''}
                     onChange={(e) => setModalForm({ ...modalForm, password: e.target.value })}
@@ -649,6 +652,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     <input
                       id="modal-create-coins"
                       type="number"
+                      inputMode="numeric"
                       min={0}
                       max={999999999}
                       className="admin-input admin-input--mono"
@@ -662,6 +666,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                   <input
                     id="modal-create-lives"
                     type="number"
+                    inputMode="numeric"
                     min={0}
                     max={5}
                     className="admin-input admin-input--mono"
@@ -680,6 +685,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     <input
                       id="modal-upd-coins"
                       type="number"
+                      inputMode="numeric"
                       min={0}
                       max={999999999}
                       className="admin-input admin-input--mono"
@@ -693,6 +699,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     <input
                       id="modal-upd-wins"
                       type="number"
+                      inputMode="numeric"
                       min={0}
                       className="admin-input admin-input--mono"
                       value={modalForm.totalWins ?? 0}
@@ -705,6 +712,7 @@ export default function UsersTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     <input
                       id="modal-upd-lives"
                       type="number"
+                      inputMode="numeric"
                       min={0}
                       max={5}
                       className="admin-input admin-input--mono"

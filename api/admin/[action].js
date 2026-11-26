@@ -355,6 +355,13 @@ export default async function handler(req, res) {
           code: 'VALIDATION_ERROR',
         });
       }
+      if (db.isDashboardOnlyAdminUsername(data.username)) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'Username ini dicadangkan khusus untuk akses Admin Dashboard.',
+          code: 'RESERVED_DASHBOARD_ADMIN',
+        });
+      }
       const passCheck = strongPasswordSchema.safeParse(data.password);
       if (!passCheck.success) {
         return sendJson(res, 400, {

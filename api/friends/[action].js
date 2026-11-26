@@ -19,6 +19,19 @@ const addFriendSchema = z
     message: 'username atau friendUserId wajib diisi.',
   });
 
+const acceptFriendSchema = z
+  .strictObject({
+    requesterUserId: z.string().uuid('requesterUserId tidak valid.').optional(),
+    username: z.string().trim().min(1).max(32).optional(),
+  })
+  .refine((data) => Boolean(data.requesterUserId || data.username), {
+    message: 'requesterUserId atau username wajib diisi.',
+  });
+
+const declineFriendSchema = z.strictObject({
+  targetUserId: z.string().uuid('targetUserId tidak valid.'),
+});
+
 const removeFriendSchema = z.strictObject({
   friendUserId: z.string().uuid('friendUserId tidak valid.'),
 });
@@ -41,8 +54,10 @@ export default async function handler(req, res) {
     const search = String(req.query?.search || '').trim().slice(0, 64);
     await db.cleanupStaleRooms(15);
 
-    const [rawFriends, rawDirectory] = await Promise.all([
+    const [rawFriends, rawIncoming, rawOutgoing, rawDirectory] = await Promise.all([
       db.listFriendsWithPresence(auth.user.id),
+      db.listIncomingFriendRequests(auth.user.id),
+      db.listOutgoingFriendRequests(auth.user.id),
       db.listTopOrSearchPlayers({ viewerUserId: auth.user.id, search, limit: 10 }),
     ]);
 
@@ -50,7 +65,30 @@ export default async function handler(req, res) {
       serializePublicPlayerCard(f, {
         isFriend: true,
         isSelf: false,
+        friendshipStatus: 'friends',
         activeRoom: serializeActiveRoomSummary(f.activeRoomRaw, { isFriend: true }),
+      })
+    );
+
+    const incomingRequests = rawIncoming.map((r) =>
+      serializePublicPlayerCard(r, {
+        isFriend: false,
+        isSelf: false,
+        hasIncomingRequest: true,
+        friendshipStatus: 'incoming_pending',
+        requestedAt: r.requestedAt,
+        activeRoom: null,
+      })
+    );
+
+    const outgoingRequests = rawOutgoing.map((r) =>
+      serializePublicPlayerCard(r, {
+        isFriend: false,
+        isSelf: false,
+        hasOutgoingRequest: true,
+        friendshipStatus: 'outgoing_pending',
+        requestedAt: r.requestedAt,
+        activeRoom: null,
       })
     );
 
@@ -58,11 +96,20 @@ export default async function handler(req, res) {
       serializePublicPlayerCard(p, {
         isFriend: Boolean(p.isFriend),
         isSelf: Boolean(p.isSelf),
-        activeRoom: serializeActiveRoomSummary(p.activeRoomRaw, { isFriend: Boolean(p.isFriend) }),
+        hasIncomingRequest: Boolean(p.hasIncomingRequest),
+        hasOutgoingRequest: Boolean(p.hasOutgoingRequest),
+        friendshipStatus: p.friendshipStatus,
+        activeRoom: p.isFriend ? serializeActiveRoomSummary(p.activeRoomRaw, { isFriend: true }) : null,
       })
     );
 
-    return sendJson(res, 200, { ok: true, friends, directory });
+    return sendJson(res, 200, {
+      ok: true,
+      friends,
+      incomingRequests,
+      outgoingRequests,
+      directory,
+    });
   }
 
   if (action === 'add') {
@@ -82,7 +129,7 @@ export default async function handler(req, res) {
       ? await db.findUserById(parsed.data.friendUserId)
       : await db.findUserByUsername(parsed.data.username);
 
-    if (!target || target.is_banned) {
+    if (!target || target.is_banned || db.isDashboardOnlyAdminUsername(target.username)) {
       return sendJson(res, 404, {
         ok: false,
         error: 'Pemain tidak ditemukan.',
@@ -98,19 +145,110 @@ export default async function handler(req, res) {
       });
     }
 
-    await db.addFriend(auth.user.id, target.id);
+    const result = await db.sendOrAcceptFriendRequest(auth.user.id, target.id);
+    if (result.status === 'friends' || result.status === 'accepted') {
+      const friends = await db.listFriendsWithPresence(auth.user.id);
+      const addedRow = friends.find((f) => f.id === target.id) || target;
+      const friend = serializePublicPlayerCard(addedRow, {
+        isFriend: true,
+        isSelf: false,
+        friendshipStatus: 'friends',
+        activeRoom: serializeActiveRoomSummary(addedRow.activeRoomRaw || null, { isFriend: true }),
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        status: result.status,
+        message:
+          result.status === 'accepted'
+            ? 'Permintaan pertemanan diterima.'
+            : 'Pemain sudah ada di daftar teman.',
+        friend,
+      });
+    }
+
+    const targetCard = serializePublicPlayerCard(target, {
+      isFriend: false,
+      isSelf: false,
+      hasOutgoingRequest: true,
+      friendshipStatus: 'outgoing_pending',
+      activeRoom: null,
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      status: 'request_sent',
+      message: 'Permintaan pertemanan terkirim.',
+      target: targetCard,
+    });
+  }
+
+  if (action === 'accept') {
+    if (req.method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
+    }
+    const parsed = acceptFriendSchema.safeParse(pre.body);
+    if (!parsed.success) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: formatZodError(parsed.error),
+        code: 'VALIDATION_ERROR',
+      });
+    }
+
+    const requester = parsed.data.requesterUserId
+      ? await db.findUserById(parsed.data.requesterUserId)
+      : await db.findUserByUsername(parsed.data.username);
+
+    if (!requester || requester.is_banned || db.isDashboardOnlyAdminUsername(requester.username)) {
+      return sendJson(res, 404, {
+        ok: false,
+        error: 'Pemain tidak ditemukan.',
+        code: 'USER_NOT_FOUND',
+      });
+    }
+
+    const result = await db.acceptFriendRequest(auth.user.id, requester.id);
+    if (!result.ok) {
+      return sendJson(res, 404, {
+        ok: false,
+        error: 'Permintaan pertemanan tidak ditemukan.',
+        code: 'REQUEST_NOT_FOUND',
+      });
+    }
+
     const friends = await db.listFriendsWithPresence(auth.user.id);
-    const addedRow = friends.find((f) => f.id === target.id) || target;
+    const addedRow = friends.find((f) => f.id === requester.id) || requester;
     const friend = serializePublicPlayerCard(addedRow, {
       isFriend: true,
       isSelf: false,
+      friendshipStatus: 'friends',
       activeRoom: serializeActiveRoomSummary(addedRow.activeRoomRaw || null, { isFriend: true }),
     });
 
     return sendJson(res, 200, {
       ok: true,
-      message: 'Teman berhasil ditambahkan.',
+      status: 'accepted',
+      message: 'Permintaan pertemanan diterima.',
       friend,
+    });
+  }
+
+  if (action === 'decline') {
+    if (req.method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
+    }
+    const parsed = declineFriendSchema.safeParse(pre.body);
+    if (!parsed.success) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: formatZodError(parsed.error),
+        code: 'VALIDATION_ERROR',
+      });
+    }
+
+    await db.declineOrCancelFriendRequest(auth.user.id, parsed.data.targetUserId);
+    return sendJson(res, 200, {
+      ok: true,
+      message: 'Permintaan pertemanan dibatalkan.',
     });
   }
 

@@ -8,9 +8,27 @@ import {
   sanitizeDeepValue,
   sanitizeProfileText,
   sanitizeText,
+  sanitizeVoicePayload,
 } from './security.js';
 
 export const ONLINE_WINDOW_MS = 45_000;
+
+export function isDashboardOnlyAdminUsername(username) {
+  const lower = String(username || '').trim().toLowerCase();
+  if (!lower) return false;
+  if (lower === 'admin_lampor') return true;
+  const envAdmin = String(process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+  return Boolean(envAdmin && lower === envAdmin);
+}
+
+function getDashboardOnlyAdminUsernames() {
+  const set = new Set(['admin_lampor']);
+  const envAdmin = String(process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+  if (envAdmin) {
+    set.add(envAdmin);
+  }
+  return Array.from(set);
+}
 
 let sqlClient = null;
 let neonSchemaPromise = null;
@@ -59,6 +77,7 @@ function createInitialMemoryState() {
     users: new Map(),
     sessions: new Map(),
     friendships: new Map(),
+    friendRequests: new Map(),
     rooms: new Map(),
     roomPlayers: new Map(),
     roomEvents: [],
@@ -292,6 +311,16 @@ async function runNeonSchemaInit() {
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_friendships_user_created ON friendships(user_id, created_at DESC)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS friend_requests (
+      requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (requester_id, recipient_id)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_friend_requests_recipient ON friend_requests(recipient_id, created_at DESC)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS rooms (
@@ -1228,6 +1257,7 @@ function getMemUserPresence(userId, fallbackLastLoginAt = null, nowMs = Date.now
 
   for (const s of mem.sessions.values()) {
     if (s.user_id !== userId) continue;
+    if (s.session_type === 'admin') continue;
     const seenMs = s.last_seen_at ? new Date(s.last_seen_at).getTime() : 0;
     if (seenMs > 0 && (latestSeenMs === null || seenMs > latestSeenMs)) {
       latestSeenMs = seenMs;
@@ -1260,10 +1290,12 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
 
   if (isMemoryMode()) {
     const nowMs = Date.now();
-    let list = Array.from(mem.users.values()).map((u) => {
-      const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
-      return normalizeUserRow({ ...u, ...presence });
-    });
+    let list = Array.from(mem.users.values())
+      .filter((u) => !isDashboardOnlyAdminUsername(u.username))
+      .map((u) => {
+        const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
+        return normalizeUserRow({ ...u, ...presence });
+      });
     if (cleanSearch) {
       list = list.filter((u) => u.username_lower.includes(cleanSearch));
     }
@@ -1293,6 +1325,7 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
   const hasSearch = cleanSearch.length > 0;
   const offset = (safePage - 1) * safeSize;
   const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const excludedAdmins = getDashboardOnlyAdminUsernames();
 
   const countRows = await sql`
     WITH user_presence AS (
@@ -1303,16 +1336,18 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
           AND EXISTS (
             SELECT 1 FROM sessions s
             WHERE s.user_id = u.id
+              AND s.session_type <> 'admin'
               AND s.revoked_at IS NULL
               AND s.expires_at > NOW()
               AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
           )
         ) AS is_online,
         COALESCE(
-          (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+          (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
           u.last_login_at
         ) AS last_seen_at
       FROM users u
+      WHERE NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
     )
     SELECT COUNT(*)::int AS total FROM user_presence up
     WHERE (${!hasSearch} OR up.username_lower LIKE ${like} ESCAPE '!')
@@ -1336,16 +1371,18 @@ export async function listUsersAdmin({ search = '', status = 'all', page = 1, pa
           AND EXISTS (
             SELECT 1 FROM sessions s
             WHERE s.user_id = u.id
+              AND s.session_type <> 'admin'
               AND s.revoked_at IS NULL
               AND s.expires_at > NOW()
               AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
           )
         ) AS is_online,
         COALESCE(
-          (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+          (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
           u.last_login_at
         ) AS last_seen_at
       FROM users u
+      WHERE NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
     )
     SELECT * FROM user_presence up
     WHERE (${!hasSearch} OR up.username_lower LIKE ${like} ESCAPE '!')
@@ -1447,6 +1484,10 @@ export async function adminDeleteUser(userId) {
     mem.friendships.delete(userId);
     for (const fMap of mem.friendships.values()) {
       fMap.delete(userId);
+    }
+    mem.friendRequests.delete(userId);
+    for (const rMap of mem.friendRequests.values()) {
+      rMap.delete(userId);
     }
     for (const [roomId, playersMap] of mem.roomPlayers.entries()) {
       playersMap.delete(userId);
@@ -1750,6 +1791,7 @@ export async function getOverviewStats() {
     let totalUsers = 0;
     let bannedUsers = 0;
     for (const u of mem.users.values()) {
+      if (isDashboardOnlyAdminUsername(u.username)) continue;
       totalUsers += 1;
       if (u.is_banned) bannedUsers += 1;
     }
@@ -1757,14 +1799,14 @@ export async function getOverviewStats() {
     const onlineCutoffMs = nowMs - ONLINE_WINDOW_MS;
     const onlineUserIds = new Set();
     for (const s of mem.sessions.values()) {
+      if (s.session_type === 'admin') continue;
+      const u = mem.users.get(s.user_id);
+      if (!u || isDashboardOnlyAdminUsername(u.username)) continue;
       if (!s.revoked_at && new Date(s.expires_at).getTime() > nowMs) {
         activeSessions += 1;
         const seenMs = s.last_seen_at ? new Date(s.last_seen_at).getTime() : 0;
-        if (seenMs >= onlineCutoffMs) {
-          const u = mem.users.get(s.user_id);
-          if (u && !u.is_banned) {
-            onlineUserIds.add(u.id);
-          }
+        if (seenMs >= onlineCutoffMs && !u.is_banned) {
+          onlineUserIds.add(u.id);
         }
       }
     }
@@ -1797,22 +1839,30 @@ export async function getOverviewStats() {
 
   const sql = getSql();
   const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const excludedAdmins = getDashboardOnlyAdminUsernames();
   const [uStats] = await sql`
     SELECT
       COUNT(*)::int AS total_users,
       COUNT(*) FILTER (WHERE is_banned = TRUE)::int AS banned_users
     FROM users
+    WHERE NOT (username_lower = ANY(${excludedAdmins}::text[]))
   `;
   const [sStats] = await sql`
     SELECT COUNT(*)::int AS active_sessions
-    FROM sessions
-    WHERE revoked_at IS NULL AND expires_at > NOW()
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.revoked_at IS NULL
+      AND s.expires_at > NOW()
+      AND s.session_type <> 'admin'
+      AND NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
   `;
   const [onlineStats] = await sql`
     SELECT COUNT(DISTINCT s.user_id)::int AS online_users
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE u.is_banned = FALSE
+      AND NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
+      AND s.session_type <> 'admin'
       AND s.revoked_at IS NULL
       AND s.expires_at > NOW()
       AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
@@ -1859,7 +1909,10 @@ function getMemRoomPlayersArray(roomId) {
 }
 
 async function appendRoomEvent({ roomId, senderUserId = null, senderUsername = '', eventType, payload = {} }) {
-  const cleanPayload = sanitizeDeepValue(payload) || {};
+  const cleanPayload =
+    eventType === 'voice'
+      ? sanitizeVoicePayload(payload) || {}
+      : sanitizeDeepValue(payload) || {};
   const id = crypto.randomUUID();
   const cleanSender = sanitizeText(senderUsername, 32);
 
@@ -2436,7 +2489,17 @@ export async function syncRoom({
       room.world_state = sanitizeDeepValue(worldState) || {};
     }
 
-    for (const ev of events.slice(0, 10)) {
+    const voiceCutoffMs = Date.now() - 15_000;
+    mem.roomEvents = mem.roomEvents.filter(
+      (ev) =>
+        !(
+          ev.room_id === roomId &&
+          ev.event_type === 'voice' &&
+          new Date(ev.created_at).getTime() < voiceCutoffMs
+        )
+    );
+
+    for (const ev of events.slice(0, 16)) {
       await appendRoomEvent({
         roomId,
         senderUserId: userId,
@@ -2545,7 +2608,15 @@ export async function syncRoom({
     await sql`UPDATE rooms SET last_activity_at = NOW(), updated_at = NOW() WHERE id = ${roomId}`;
   }
 
-  for (const ev of events.slice(0, 10)) {
+  const voiceCutoffIso = new Date(Date.now() - 15_000).toISOString();
+  await sql`
+    DELETE FROM room_events
+    WHERE room_id = ${roomId}
+      AND event_type = 'voice'
+      AND created_at < ${voiceCutoffIso}::timestamptz
+  `;
+
+  for (const ev of events.slice(0, 16)) {
     await appendRoomEvent({
       roomId,
       senderUserId: userId,
@@ -2707,40 +2778,170 @@ export async function getActiveRoomMapForUsers(userIds) {
   return result;
 }
 
-export async function addFriend(userId, friendUserId) {
+function setMemMutualFriendship(userA, userB, nowIso = new Date().toISOString()) {
+  let mapA = mem.friendships.get(userA);
+  if (!mapA) {
+    mapA = new Map();
+    mem.friendships.set(userA, mapA);
+  }
+  if (!mapA.has(userB)) mapA.set(userB, nowIso);
+
+  let mapB = mem.friendships.get(userB);
+  if (!mapB) {
+    mapB = new Map();
+    mem.friendships.set(userB, mapB);
+  }
+  if (!mapB.has(userA)) mapB.set(userA, nowIso);
+}
+
+function deleteMemFriendRequestsBetween(userA, userB) {
+  let deleted = false;
+  if (mem.friendRequests.get(userA)?.delete(userB)) deleted = true;
+  if (mem.friendRequests.get(userB)?.delete(userA)) deleted = true;
+  return deleted;
+}
+
+export async function sendOrAcceptFriendRequest(requesterId, recipientId) {
   await ensureSchema();
   if (isMemoryMode()) {
-    let fMap = mem.friendships.get(userId);
-    if (!fMap) {
-      fMap = new Map();
-      mem.friendships.set(userId, fMap);
+    if (mem.friendships.get(requesterId)?.has(recipientId)) {
+      return { status: 'friends' };
     }
-    if (!fMap.has(friendUserId)) {
-      fMap.set(friendUserId, new Date().toISOString());
+    const reverseExists = mem.friendRequests.get(requesterId)?.has(recipientId);
+    if (reverseExists) {
+      deleteMemFriendRequestsBetween(requesterId, recipientId);
+      setMemMutualFriendship(requesterId, recipientId);
+      return { status: 'accepted' };
     }
-    return true;
+    let rMap = mem.friendRequests.get(recipientId);
+    if (!rMap) {
+      rMap = new Map();
+      mem.friendRequests.set(recipientId, rMap);
+    }
+    if (!rMap.has(requesterId)) {
+      rMap.set(requesterId, new Date().toISOString());
+    }
+    return { status: 'request_sent' };
   }
+
   const sql = getSql();
+  const existingFriend = await sql`
+    SELECT 1 FROM friendships
+    WHERE user_id = ${requesterId} AND friend_id = ${recipientId}
+    LIMIT 1
+  `;
+  if (existingFriend.length > 0) {
+    return { status: 'friends' };
+  }
+
+  const reverseRows = await sql`
+    SELECT 1 FROM friend_requests
+    WHERE requester_id = ${recipientId} AND recipient_id = ${requesterId}
+    LIMIT 1
+  `;
+  if (reverseRows.length > 0) {
+    await sql`
+      DELETE FROM friend_requests
+      WHERE (requester_id = ${requesterId} AND recipient_id = ${recipientId})
+         OR (requester_id = ${recipientId} AND recipient_id = ${requesterId})
+    `;
+    await sql`
+      INSERT INTO friendships (user_id, friend_id)
+      VALUES (${requesterId}, ${recipientId}), (${recipientId}, ${requesterId})
+      ON CONFLICT (user_id, friend_id) DO NOTHING
+    `;
+    return { status: 'accepted' };
+  }
+
+  await sql`
+    INSERT INTO friend_requests (requester_id, recipient_id)
+    VALUES (${requesterId}, ${recipientId})
+    ON CONFLICT (requester_id, recipient_id) DO NOTHING
+  `;
+  return { status: 'request_sent' };
+}
+
+export async function acceptFriendRequest(recipientId, requesterId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    if (mem.friendships.get(recipientId)?.has(requesterId)) {
+      return { ok: true, status: 'friends' };
+    }
+    const hasReq = mem.friendRequests.get(recipientId)?.has(requesterId);
+    if (!hasReq) {
+      return { ok: false, status: 'not_found' };
+    }
+    deleteMemFriendRequestsBetween(recipientId, requesterId);
+    setMemMutualFriendship(recipientId, requesterId);
+    return { ok: true, status: 'accepted' };
+  }
+
+  const sql = getSql();
+  const existingFriend = await sql`
+    SELECT 1 FROM friendships
+    WHERE user_id = ${recipientId} AND friend_id = ${requesterId}
+    LIMIT 1
+  `;
+  if (existingFriend.length > 0) {
+    return { ok: true, status: 'friends' };
+  }
+
+  const reqRows = await sql`
+    SELECT 1 FROM friend_requests
+    WHERE requester_id = ${requesterId} AND recipient_id = ${recipientId}
+    LIMIT 1
+  `;
+  if (reqRows.length === 0) {
+    return { ok: false, status: 'not_found' };
+  }
+
+  await sql`
+    DELETE FROM friend_requests
+    WHERE (requester_id = ${recipientId} AND recipient_id = ${requesterId})
+       OR (requester_id = ${requesterId} AND recipient_id = ${recipientId})
+  `;
   await sql`
     INSERT INTO friendships (user_id, friend_id)
-    VALUES (${userId}, ${friendUserId})
+    VALUES (${recipientId}, ${requesterId}), (${requesterId}, ${recipientId})
     ON CONFLICT (user_id, friend_id) DO NOTHING
   `;
-  return true;
+  return { ok: true, status: 'accepted' };
+}
+
+export async function declineOrCancelFriendRequest(userA, userB) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    return deleteMemFriendRequestsBetween(userA, userB);
+  }
+  const sql = getSql();
+  const rows = await sql`
+    DELETE FROM friend_requests
+    WHERE (requester_id = ${userA} AND recipient_id = ${userB})
+       OR (requester_id = ${userB} AND recipient_id = ${userA})
+    RETURNING requester_id
+  `;
+  return rows.length > 0;
 }
 
 export async function removeFriend(userId, friendUserId) {
   await ensureSchema();
   if (isMemoryMode()) {
-    const fMap = mem.friendships.get(userId);
-    if (!fMap) return false;
-    return fMap.delete(friendUserId);
+    const delA = mem.friendships.get(userId)?.delete(friendUserId) || false;
+    const delB = mem.friendships.get(friendUserId)?.delete(userId) || false;
+    deleteMemFriendRequestsBetween(userId, friendUserId);
+    return delA || delB;
   }
   const sql = getSql();
   const rows = await sql`
     DELETE FROM friendships
-    WHERE user_id = ${userId} AND friend_id = ${friendUserId}
+    WHERE (user_id = ${userId} AND friend_id = ${friendUserId})
+       OR (user_id = ${friendUserId} AND friend_id = ${userId})
     RETURNING friend_id
+  `;
+  await sql`
+    DELETE FROM friend_requests
+    WHERE (requester_id = ${userId} AND recipient_id = ${friendUserId})
+       OR (requester_id = ${friendUserId} AND recipient_id = ${userId})
   `;
   return rows.length > 0;
 }
@@ -2753,20 +2954,132 @@ export async function hasFriendInUserIds(userId, candidateUserIds) {
   if (isMemoryMode()) {
     const myFriends = mem.friendships.get(userId);
     for (const cid of candidates) {
-      if (myFriends?.has(cid)) return true;
-      if (mem.friendships.get(cid)?.has(userId)) return true;
+      if (myFriends?.has(cid) && mem.friendships.get(cid)?.has(userId)) return true;
     }
     return false;
   }
 
   const sql = getSql();
   const rows = await sql`
-    SELECT 1 FROM friendships
-    WHERE (user_id = ${userId} AND friend_id = ANY(${candidates}::uuid[]))
-       OR (friend_id = ${userId} AND user_id = ANY(${candidates}::uuid[]))
+    SELECT 1 FROM friendships f1
+    JOIN friendships f2 ON f2.user_id = f1.friend_id AND f2.friend_id = f1.user_id
+    WHERE f1.user_id = ${userId}
+      AND f1.friend_id = ANY(${candidates}::uuid[])
     LIMIT 1
   `;
   return rows.length > 0;
+}
+
+export async function listIncomingFriendRequests(userId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    const rMap = mem.friendRequests.get(userId);
+    if (!rMap || rMap.size === 0) return [];
+    const nowMs = Date.now();
+    const list = [];
+    for (const [requesterId, requestedAt] of rMap.entries()) {
+      const u = mem.users.get(requesterId);
+      if (!u || u.is_banned || isDashboardOnlyAdminUsername(u.username)) continue;
+      const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
+      list.push({
+        ...normalizeUserRow({ ...u, ...presence }),
+        requestedAt: requestedAt ? new Date(requestedAt).toISOString() : null,
+      });
+    }
+    return list.sort(
+      (a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime()
+    );
+  }
+
+  const sql = getSql();
+  const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const excludedAdmins = getDashboardOnlyAdminUsernames();
+  const rows = await sql`
+    SELECT
+      u.*,
+      fr.created_at AS requested_at,
+      (
+        u.is_banned = FALSE
+        AND EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.user_id = u.id
+            AND s.session_type <> 'admin'
+            AND s.revoked_at IS NULL
+            AND s.expires_at > NOW()
+            AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+        )
+      ) AS is_online,
+      COALESCE(
+        (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
+        u.last_login_at
+      ) AS last_seen_at
+    FROM friend_requests fr
+    JOIN users u ON u.id = fr.requester_id
+    WHERE fr.recipient_id = ${userId}
+      AND u.is_banned = FALSE
+      AND NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
+    ORDER BY fr.created_at DESC
+  `;
+  return rows.map((r) => ({
+    ...normalizeUserRow(r),
+    requestedAt: r.requested_at ? new Date(r.requested_at).toISOString() : null,
+  }));
+}
+
+export async function listOutgoingFriendRequests(userId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    const nowMs = Date.now();
+    const list = [];
+    for (const [recipientId, rMap] of mem.friendRequests.entries()) {
+      const requestedAt = rMap.get(userId);
+      if (!requestedAt) continue;
+      const u = mem.users.get(recipientId);
+      if (!u || u.is_banned || isDashboardOnlyAdminUsername(u.username)) continue;
+      const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
+      list.push({
+        ...normalizeUserRow({ ...u, ...presence }),
+        requestedAt: requestedAt ? new Date(requestedAt).toISOString() : null,
+      });
+    }
+    return list.sort(
+      (a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime()
+    );
+  }
+
+  const sql = getSql();
+  const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const excludedAdmins = getDashboardOnlyAdminUsernames();
+  const rows = await sql`
+    SELECT
+      u.*,
+      fr.created_at AS requested_at,
+      (
+        u.is_banned = FALSE
+        AND EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.user_id = u.id
+            AND s.session_type <> 'admin'
+            AND s.revoked_at IS NULL
+            AND s.expires_at > NOW()
+            AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+        )
+      ) AS is_online,
+      COALESCE(
+        (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
+        u.last_login_at
+      ) AS last_seen_at
+    FROM friend_requests fr
+    JOIN users u ON u.id = fr.recipient_id
+    WHERE fr.requester_id = ${userId}
+      AND u.is_banned = FALSE
+      AND NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
+    ORDER BY fr.created_at DESC
+  `;
+  return rows.map((r) => ({
+    ...normalizeUserRow(r),
+    requestedAt: r.requested_at ? new Date(r.requested_at).toISOString() : null,
+  }));
 }
 
 export async function listFriendsWithPresence(userId) {
@@ -2777,8 +3090,9 @@ export async function listFriendsWithPresence(userId) {
     const nowMs = Date.now();
     const friends = [];
     for (const friendId of fMap.keys()) {
+      if (!mem.friendships.get(friendId)?.has(userId)) continue;
       const u = mem.users.get(friendId);
-      if (!u || u.is_banned) continue;
+      if (!u || u.is_banned || isDashboardOnlyAdminUsername(u.username)) continue;
       const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
       friends.push(normalizeUserRow({ ...u, ...presence }));
     }
@@ -2799,6 +3113,7 @@ export async function listFriendsWithPresence(userId) {
 
   const sql = getSql();
   const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const excludedAdmins = getDashboardOnlyAdminUsernames();
   const rows = await sql`
     SELECT
       u.*,
@@ -2807,19 +3122,22 @@ export async function listFriendsWithPresence(userId) {
         AND EXISTS (
           SELECT 1 FROM sessions s
           WHERE s.user_id = u.id
+            AND s.session_type <> 'admin'
             AND s.revoked_at IS NULL
             AND s.expires_at > NOW()
             AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
         )
       ) AS is_online,
       COALESCE(
-        (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+        (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
         u.last_login_at
       ) AS last_seen_at
     FROM friendships f
+    JOIN friendships f2 ON f2.user_id = f.friend_id AND f2.friend_id = f.user_id
     JOIN users u ON u.id = f.friend_id
     WHERE f.user_id = ${userId}
       AND u.is_banned = FALSE
+      AND NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
   `;
 
   if (rows.length === 0) return [];
@@ -2846,7 +3164,15 @@ export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit 
   if (isMemoryMode()) {
     const nowMs = Date.now();
     const fMap = mem.friendships.get(viewerUserId) || new Map();
-    let list = Array.from(mem.users.values()).filter((u) => !u.is_banned);
+    const incomingMap = mem.friendRequests.get(viewerUserId) || new Map();
+    const outgoingSet = new Set();
+    for (const [recipientId, rMap] of mem.friendRequests.entries()) {
+      if (rMap.has(viewerUserId)) outgoingSet.add(recipientId);
+    }
+
+    let list = Array.from(mem.users.values()).filter(
+      (u) => !u.is_banned && !isDashboardOnlyAdminUsername(u.username)
+    );
 
     if (cleanSearch) {
       const rankMatch = (u) => {
@@ -2882,14 +3208,34 @@ export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit 
     }
 
     const sliced = list.slice(0, safeLimit);
-    const roomMap = await getActiveRoomMapForUsers(sliced.map((u) => u.id));
+    const friendIds = sliced
+      .filter((u) => fMap.has(u.id) && mem.friendships.get(u.id)?.has(viewerUserId))
+      .map((u) => u.id);
+    const roomMap = await getActiveRoomMapForUsers(friendIds);
+
     return sliced.map((u) => {
       const presence = getMemUserPresence(u.id, u.last_login_at, nowMs, u.is_banned);
+      const isSelf = u.id === viewerUserId;
+      const isFriend = !isSelf && fMap.has(u.id) && Boolean(mem.friendships.get(u.id)?.has(viewerUserId));
+      const hasIncomingRequest = !isSelf && !isFriend && incomingMap.has(u.id);
+      const hasOutgoingRequest = !isSelf && !isFriend && outgoingSet.has(u.id);
+      const friendshipStatus = isSelf
+        ? 'self'
+        : isFriend
+          ? 'friends'
+          : hasIncomingRequest
+            ? 'incoming_pending'
+            : hasOutgoingRequest
+              ? 'outgoing_pending'
+              : 'none';
       return {
         ...normalizeUserRow({ ...u, ...presence }),
-        isFriend: fMap.has(u.id),
-        isSelf: u.id === viewerUserId,
-        activeRoomRaw: roomMap.get(u.id) || null,
+        isFriend,
+        isSelf,
+        hasIncomingRequest,
+        hasOutgoingRequest,
+        friendshipStatus,
+        activeRoomRaw: isFriend ? roomMap.get(u.id) || null : null,
       };
     });
   }
@@ -2898,6 +3244,7 @@ export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit 
   const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
   const like = `%${escapeLikePattern(cleanSearch)}%`;
   const prefixLike = `${escapeLikePattern(cleanSearch)}%`;
+  const excludedAdmins = getDashboardOnlyAdminUsernames();
 
   const rows = cleanSearch
     ? await sql`
@@ -2908,21 +3255,32 @@ export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit 
             AND EXISTS (
               SELECT 1 FROM sessions s
               WHERE s.user_id = u.id
+                AND s.session_type <> 'admin'
                 AND s.revoked_at IS NULL
                 AND s.expires_at > NOW()
                 AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
             )
           ) AS is_online,
           COALESCE(
-            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
             u.last_login_at
           ) AS last_seen_at,
           EXISTS (
             SELECT 1 FROM friendships f
+            JOIN friendships f2 ON f2.user_id = f.friend_id AND f2.friend_id = f.user_id
             WHERE f.user_id = ${viewerUserId} AND f.friend_id = u.id
-          ) AS is_friend
+          ) AS is_friend,
+          EXISTS (
+            SELECT 1 FROM friend_requests fr
+            WHERE fr.requester_id = u.id AND fr.recipient_id = ${viewerUserId}
+          ) AS has_incoming_request,
+          EXISTS (
+            SELECT 1 FROM friend_requests fr
+            WHERE fr.requester_id = ${viewerUserId} AND fr.recipient_id = u.id
+          ) AS has_outgoing_request
         FROM users u
         WHERE u.is_banned = FALSE
+          AND NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
           AND (u.username_lower LIKE ${like} ESCAPE '!' OR LOWER(u.display_name) LIKE ${like} ESCAPE '!')
         ORDER BY
           CASE
@@ -2943,31 +3301,61 @@ export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit 
             AND EXISTS (
               SELECT 1 FROM sessions s
               WHERE s.user_id = u.id
+                AND s.session_type <> 'admin'
                 AND s.revoked_at IS NULL
                 AND s.expires_at > NOW()
                 AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
             )
           ) AS is_online,
           COALESCE(
-            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+            (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
             u.last_login_at
           ) AS last_seen_at,
           EXISTS (
             SELECT 1 FROM friendships f
+            JOIN friendships f2 ON f2.user_id = f.friend_id AND f2.friend_id = f.user_id
             WHERE f.user_id = ${viewerUserId} AND f.friend_id = u.id
-          ) AS is_friend
+          ) AS is_friend,
+          EXISTS (
+            SELECT 1 FROM friend_requests fr
+            WHERE fr.requester_id = u.id AND fr.recipient_id = ${viewerUserId}
+          ) AS has_incoming_request,
+          EXISTS (
+            SELECT 1 FROM friend_requests fr
+            WHERE fr.requester_id = ${viewerUserId} AND fr.recipient_id = u.id
+          ) AS has_outgoing_request
         FROM users u
         WHERE u.is_banned = FALSE
+          AND NOT (u.username_lower = ANY(${excludedAdmins}::text[]))
         ORDER BY u.total_wins DESC, u.coins DESC, u.created_at ASC
         LIMIT ${safeLimit}
       `;
 
   if (rows.length === 0) return [];
-  const roomMap = await getActiveRoomMapForUsers(rows.map((r) => r.id));
-  return rows.map((r) => ({
-    ...normalizeUserRow(r),
-    isFriend: Boolean(r.is_friend),
-    isSelf: r.id === viewerUserId,
-    activeRoomRaw: roomMap.get(r.id) || null,
-  }));
+  const friendIds = rows.filter((r) => Boolean(r.is_friend) && r.id !== viewerUserId).map((r) => r.id);
+  const roomMap = await getActiveRoomMapForUsers(friendIds);
+  return rows.map((r) => {
+    const isSelf = r.id === viewerUserId;
+    const isFriend = !isSelf && Boolean(r.is_friend);
+    const hasIncomingRequest = !isSelf && !isFriend && Boolean(r.has_incoming_request);
+    const hasOutgoingRequest = !isSelf && !isFriend && Boolean(r.has_outgoing_request);
+    const friendshipStatus = isSelf
+      ? 'self'
+      : isFriend
+        ? 'friends'
+        : hasIncomingRequest
+          ? 'incoming_pending'
+          : hasOutgoingRequest
+            ? 'outgoing_pending'
+            : 'none';
+    return {
+      ...normalizeUserRow(r),
+      isFriend,
+      isSelf,
+      hasIncomingRequest,
+      hasOutgoingRequest,
+      friendshipStatus,
+      activeRoomRaw: isFriend ? roomMap.get(r.id) || null : null,
+    };
+  });
 }

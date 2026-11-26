@@ -365,6 +365,9 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                   id="sec-ip-address"
                   type="text"
                   className="admin-input admin-input--mono"
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
                   placeholder="203.0.113.10"
                   value={ipInput}
                   onChange={(e) => setIpInput(e.target.value)}
@@ -392,6 +395,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                 <input
                   id="sec-ip-hours"
                   type="number"
+                  inputMode="numeric"
                   min={0}
                   max={8760}
                   className="admin-input admin-input--mono"
@@ -644,7 +648,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                   <tr>
                     <th>Waktu</th>
                     <th>Tipe Kejadian</th>
-                    <th>Subjek &amp; IP</th>
+                    <th>Subjek</th>
                     <th>Detail</th>
                   </tr>
                 </thead>
@@ -663,9 +667,8 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                           {log.eventType || 'event'}
                         </span>
                       </td>
-                      <td data-label="Subjek & IP">
+                      <td data-label="Subjek">
                         <div>{log.username || 'Anonim'}</div>
-                        {log.ipAddress && <span className="mono-chip">{log.ipAddress}</span>}
                       </td>
                       <td data-label="Detail">
                         <div>{log.path || '-'}</div>
@@ -728,30 +731,46 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                   </tr>
                 </thead>
                 <tbody>
-                  {auditLogs.map((log, idx) => (
-                    <tr key={log.id || `${log.createdAt}-${idx}`}>
-                      <td data-label="Waktu">{formatTimestamp(log.createdAt)}</td>
-                      <td data-label="Administrator">
-                        <div>{log.adminUsername || log.adminUserId || 'admin'}</div>
-                        {log.ipAddress && <span className="mono-chip">{log.ipAddress}</span>}
-                      </td>
-                      <td data-label="Aksi & Target">
-                        <span className="admin-tag">{log.action}</span>
-                        <div className="admin-field__hint">
-                          {log.targetType} {log.targetId ? `(${log.targetId})` : ''}
-                        </div>
-                      </td>
-                      <td data-label="Detail">
-                        <div className="admin-field__hint">
-                          {typeof log.details === 'string'
-                            ? log.details
-                            : log.details
-                              ? JSON.stringify(log.details)
-                              : '-'}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {auditLogs.map((log, idx) => {
+                    const detailUser =
+                      typeof log.details === 'object' && log.details !== null
+                        ? log.details.username
+                        : ''
+                    const rawTarget = log.targetId ? String(log.targetId) : ''
+                    const friendlyTarget =
+                      detailUser ||
+                      (rawTarget && !/^[0-9a-f-]{36}$/i.test(rawTarget) ? rawTarget : '')
+                    const safeAdminName =
+                      log.adminUsername ||
+                      (log.adminUserId && !/^[0-9a-f-]{36}$/i.test(String(log.adminUserId))
+                        ? log.adminUserId
+                        : 'admin')
+
+                    return (
+                      <tr key={log.id || `${log.createdAt}-${idx}`}>
+                        <td data-label="Waktu">{formatTimestamp(log.createdAt)}</td>
+                        <td data-label="Administrator">
+                          <div>{safeAdminName}</div>
+                        </td>
+                        <td data-label="Aksi & Target">
+                          <span className="admin-tag">{log.action}</span>
+                          <div className="admin-field__hint">
+                            {log.targetType}
+                            {friendlyTarget ? ` (${friendlyTarget})` : ''}
+                          </div>
+                        </td>
+                        <td data-label="Detail">
+                          <div className="admin-field__hint">
+                            {typeof log.details === 'string'
+                              ? log.details
+                              : log.details
+                                ? JSON.stringify(log.details)
+                                : '-'}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -808,6 +827,9 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                       id="redeem-code-input"
                       type="text"
                       className="admin-input admin-input--mono"
+                      spellCheck={false}
+                      autoCapitalize="none"
+                      autoCorrect="off"
                       placeholder="LAMPOR2026"
                       value={redeemForm.code}
                       onChange={(e) =>
@@ -855,6 +877,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                     <input
                       id="redeem-qty"
                       type="number"
+                      inputMode="numeric"
                       min={1}
                       className="admin-input admin-input--mono"
                       value={redeemForm.quantity}
@@ -867,6 +890,7 @@ export default function SecurityTab({ refreshTick, autoTick, onNotify, onUnautho
                     <input
                       id="redeem-max-uses"
                       type="number"
+                      inputMode="numeric"
                       min={1}
                       placeholder="Kosongkan jika tanpa batas"
                       className="admin-input admin-input--mono"

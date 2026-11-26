@@ -277,7 +277,7 @@ export default function RoomsTab({ refreshTick, autoTick, onNotify, onUnauthoriz
                     </span>
                   </div>
                   <p className="admin-field__hint">
-                    Host: {room.hostUsername || room.hostUserId || 'Tidak diketahui'}
+                    Host: {room.hostUsername || 'Tidak diketahui'}
                     {room.hostIsVerified && <VerifiedBadge size={14} />} | Aktivitas terakhir:{' '}
                     {formatTimestamp(room.lastActivityAt)}
                   </p>

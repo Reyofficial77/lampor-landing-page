@@ -299,6 +299,7 @@ export default function OverviewTab({ refreshTick, autoTick, onNotify, onUnautho
               <input
                 id="srv-max-rooms"
                 type="number"
+                inputMode="numeric"
                 min={1}
                 max={500}
                 className="admin-input admin-input--mono"
@@ -316,6 +317,9 @@ export default function OverviewTab({ refreshTick, autoTick, onNotify, onUnautho
                 type="text"
                 className="admin-input admin-input--mono"
                 placeholder="1.3.0"
+                spellCheck={false}
+                autoCapitalize="none"
+                autoCorrect="off"
                 value={form.minClientVersion}
                 onChange={(e) => setForm({ ...form, minClientVersion: e.target.value })}
                 disabled={saving}

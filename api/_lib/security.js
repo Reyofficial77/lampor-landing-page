@@ -675,7 +675,6 @@ export function serializeAdminUserRow(user) {
     username: user.username,
     failedLoginAttempts: Number(user.failed_login_attempts ?? 0),
     lockedUntil: user.locked_until ? new Date(user.locked_until).toISOString() : null,
-    lastLoginIp: user.last_login_ip || '',
     updatedAt: user.updated_at ? new Date(user.updated_at).toISOString() : null,
     isOnline: Boolean(user.is_online),
     lastSeenAt: user.last_seen_at ? new Date(user.last_seen_at).toISOString() : null,
@@ -753,12 +752,32 @@ export function serializeActiveRoomSummary(roomInfo, { isFriend = false } = {}) 
 
 export function serializePublicPlayerCard(
   user,
-  { isFriend = false, isSelf = false, activeRoom = null } = {}
+  {
+    isFriend = false,
+    isSelf = false,
+    hasIncomingRequest = false,
+    hasOutgoingRequest = false,
+    friendshipStatus,
+    requestedAt = null,
+    activeRoom = null,
+  } = {}
 ) {
   const cleanUsername = censorProfanity(user.username || '');
   const cleanDisplayName = censorProfanity(
     sanitizeProfileText(user.display_name || '', 32, false)
   );
+  const resolvedStatus =
+    friendshipStatus ||
+    (isSelf
+      ? 'self'
+      : isFriend
+        ? 'friends'
+        : hasIncomingRequest
+          ? 'incoming_pending'
+          : hasOutgoingRequest
+            ? 'outgoing_pending'
+            : 'none');
+
   return {
     id: user.id,
     username: cleanUsername,
@@ -771,18 +790,42 @@ export function serializePublicPlayerCard(
     lastSeenAt: user.last_seen_at ? new Date(user.last_seen_at).toISOString() : null,
     isFriend: Boolean(isFriend),
     isSelf: Boolean(isSelf),
+    hasIncomingRequest: Boolean(hasIncomingRequest),
+    hasOutgoingRequest: Boolean(hasOutgoingRequest),
+    friendshipStatus: resolvedStatus,
+    ...(requestedAt ? { requestedAt: new Date(requestedAt).toISOString() } : {}),
     activeRoom,
   };
 }
 
+export function sanitizeVoicePayload(rawPayload) {
+  if (!rawPayload || typeof rawPayload !== 'object') {
+    return null;
+  }
+  const d = rawPayload.d;
+  if (typeof d !== 'string' || d.length === 0 || d.length > 8192 || !/^[A-Za-z0-9+/=]+$/.test(d)) {
+    return null;
+  }
+  const srRaw = Number(rawPayload.sr) || 8000;
+  const sr = Math.min(16000, Math.max(4000, Math.round(srRaw)));
+  const rmsRaw = Number(rawPayload.rms);
+  const rms = Number.isFinite(rmsRaw) ? Math.min(1, Math.max(0, rmsRaw)) : 0;
+  return { d, sr, rms };
+}
+
 export function serializeRoomEvent(ev) {
-  const payload = sanitizeDeepValue(ev.payload || {}) || {};
-  if (ev.event_type === 'chat') {
-    if (typeof payload.text === 'string') {
-      payload.text = censorProfanity(payload.text);
-    }
-    if (typeof payload.message === 'string') {
-      payload.message = censorProfanity(payload.message);
+  let payload;
+  if (ev.event_type === 'voice') {
+    payload = sanitizeVoicePayload(ev.payload) || {};
+  } else {
+    payload = sanitizeDeepValue(ev.payload || {}) || {};
+    if (ev.event_type === 'chat') {
+      if (typeof payload.text === 'string') {
+        payload.text = censorProfanity(payload.text);
+      }
+      if (typeof payload.message === 'string') {
+        payload.message = censorProfanity(payload.message);
+      }
     }
   }
   return {
@@ -1016,6 +1059,15 @@ export async function requirePlayerSession(req, res, db) {
       error: 'Akun ini diblokir.',
       reason: sanitizeText(found.user.ban_reason || '', 240),
       code: 'ACCOUNT_BANNED',
+    });
+    return null;
+  }
+  if (db.isDashboardOnlyAdminUsername(found.user.username)) {
+    await db.revokeSessionByTokenHash(tokenHash);
+    sendJson(res, 403, {
+      ok: false,
+      error: 'Akun ini khusus akses Admin Dashboard dan tidak dapat dimainkan di dalam game.',
+      code: 'ADMIN_DASHBOARD_ONLY',
     });
     return null;
   }

@@ -11,6 +11,7 @@ import {
   runSecurityPreflight,
   sanitizeDeepValue,
   sanitizeText,
+  sanitizeVoicePayload,
   sendJson,
   serializePlayerUser,
   serializeRoom,
@@ -76,7 +77,7 @@ const syncRoomSchema = z.strictObject({
   lastEventSeq: z.number().int().min(0).default(0),
   playerState: z.record(z.string(), z.unknown()).optional(),
   worldState: z.record(z.string(), z.unknown()).optional(),
-  events: z.array(rawEventSchema).max(10).optional(),
+  events: z.array(rawEventSchema).max(16).optional(),
 });
 
 export default async function handler(req, res) {
@@ -495,6 +496,11 @@ export default async function handler(req, res) {
     const normalizedEvents = (parsed.data.events || [])
       .map((ev) => {
         const type = ev.type || ev.eventType || 'custom';
+        if (type === 'voice') {
+          const voicePayload = sanitizeVoicePayload(ev.payload || ev.data);
+          if (!voicePayload) return null;
+          return { type: 'voice', payload: voicePayload };
+        }
         const payload = sanitizeDeepValue(ev.payload || ev.data || {}) || {};
         if (type === 'chat') {
           if (typeof payload.text === 'string') {
@@ -507,7 +513,8 @@ export default async function handler(req, res) {
         }
         return { type, payload };
       })
-      .slice(0, 10);
+      .filter(Boolean)
+      .slice(0, 16);
 
     const synced = await db.syncRoom({
       roomId: room.id,
