@@ -36,6 +36,15 @@ const removeFriendSchema = z.strictObject({
   friendUserId: z.string().uuid('friendUserId tidak valid.'),
 });
 
+const profileQuerySchema = z
+  .strictObject({
+    userId: z.string().uuid('userId tidak valid.').optional(),
+    username: z.string().trim().min(1).max(32).optional(),
+  })
+  .refine((data) => Boolean(data.userId || data.username), {
+    message: 'userId atau username wajib diisi.',
+  });
+
 export default async function handler(req, res) {
   const action = getRouteAction(req);
   const pre = await runSecurityPreflight(req, res, db, {
@@ -109,6 +118,66 @@ export default async function handler(req, res) {
       incomingRequests,
       outgoingRequests,
       directory,
+    });
+  }
+
+  if (action === 'profile') {
+    if (req.method !== 'GET') {
+      return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
+    }
+    const rawUserId = typeof req.query?.userId === 'string' ? req.query.userId.trim() : '';
+    const rawUsername = typeof req.query?.username === 'string' ? req.query.username.trim() : '';
+    const parsed = profileQuerySchema.safeParse({
+      ...(rawUserId ? { userId: rawUserId } : {}),
+      ...(rawUsername ? { username: rawUsername } : {}),
+    });
+    if (!parsed.success) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: formatZodError(parsed.error),
+        code: 'VALIDATION_ERROR',
+      });
+    }
+
+    const target = parsed.data.userId
+      ? await db.findUserById(parsed.data.userId)
+      : await db.findUserByUsername(parsed.data.username);
+
+    if (
+      !target ||
+      target.is_banned ||
+      db.isDashboardOnlyAdminUsername(target.username) ||
+      target.role === 'admin'
+    ) {
+      return sendJson(res, 404, {
+        ok: false,
+        error: 'Pemain tidak ditemukan.',
+        code: 'USER_NOT_FOUND',
+      });
+    }
+
+    await db.cleanupStaleRooms(15);
+    const meta = await db.getPlayerPresenceAndRelationship(auth.user.id, target.id);
+    const activeRoom = meta.isFriend
+      ? serializeActiveRoomSummary(meta.activeRoomRaw, { isFriend: true })
+      : null;
+
+    return sendJson(res, 200, {
+      ok: true,
+      profile: serializePublicPlayerCard(
+        {
+          ...target,
+          is_online: meta.is_online,
+          last_seen_at: meta.last_seen_at,
+        },
+        {
+          isSelf: meta.isSelf,
+          isFriend: meta.isFriend,
+          hasIncomingRequest: meta.hasIncomingRequest,
+          hasOutgoingRequest: meta.hasOutgoingRequest,
+          activeRoom,
+        }
+      ),
     });
   }
 

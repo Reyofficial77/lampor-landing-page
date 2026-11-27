@@ -2148,3 +2148,306 @@ test('Admin & Player messages: global/user targeting, Markdown preservation, iso
   const guestGlobalAfterDel = await api('/api/auth/global-messages', { ip: '10.0.14.5' });
   assert.equal(guestGlobalAfterDel.json.messages.some((m) => m.id === globalMsgId), false);
 });
+
+test('Public player profile endpoint, bio on friend/directory cards, and room player displayName', async () => {
+  const viewer = await registerPlayer('ProfilViewer', 'ProfilPass123', '10.0.15.1');
+  const target = await registerPlayer('ProfilTarget', 'ProfilPass123', '10.0.15.2');
+  const fallbackUser = await registerPlayer('ProfilPolos', 'ProfilPass123', '10.0.15.3');
+  assert.equal(viewer.status, 201);
+  assert.equal(target.status, 201);
+  assert.equal(fallbackUser.status, 201);
+
+  // Update target profile with displayName, bio (with HTML + profanity), and preset avatar
+  const updateTarget = await api('/api/auth/profile', {
+    method: 'POST',
+    token: target.json.token,
+    ip: '10.0.15.2',
+    body: {
+      displayName: '<b>Penjaga</b> Desa',
+      bio: '<script>alert(1)</script>Penjaga anjing ronda malam.\nSiap membantu tim!',
+      avatarUrl: 'preset:obor',
+    },
+  });
+  assert.equal(updateTarget.status, 200);
+
+  const syncTarget = await api('/api/auth/sync', {
+    method: 'POST',
+    token: target.json.token,
+    ip: '10.0.15.2',
+    body: { totalWins: 7, coins: 450, saveSeq: 1 },
+  });
+  assert.equal(syncTarget.status, 200);
+
+  // Verify bio & displayName appear in /api/friends/list directory
+  const dirRes = await api('/api/friends/list?search=ProfilTarget', {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(dirRes.status, 200);
+  const dirCard = dirRes.json.directory.find((p) => p.id === target.json.user.id);
+  assert.ok(dirCard);
+  assert.equal(dirCard.displayName, 'Penjaga Desa');
+  assert.equal(dirCard.bio, 'Penjaga *** ronda malam.\nSiap membantu tim!');
+  assert.equal(dirCard.avatarUrl, 'preset:obor');
+
+  // Unauthenticated profile lookup blocked
+  const unauthProfile = await api('/api/friends/profile?username=ProfilTarget', { ip: '10.0.15.1' });
+  assert.equal(unauthProfile.status, 401);
+
+  // Missing or invalid query params return 400 VALIDATION_ERROR
+  const missingQuery = await api('/api/friends/profile', {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(missingQuery.status, 400);
+  assert.equal(missingQuery.json.code, 'VALIDATION_ERROR');
+
+  const badUuid = await api('/api/friends/profile?userId=not-a-uuid', {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(badUuid.status, 400);
+  assert.equal(badUuid.json.code, 'VALIDATION_ERROR');
+
+  // Lookup by username (case-insensitive) for non-friend
+  const byUsername = await api('/api/friends/profile?username=profiltarget', {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(byUsername.status, 200);
+  assert.equal(byUsername.json.ok, true);
+  assert.equal(byUsername.json.profile.id, target.json.user.id);
+  assert.equal(byUsername.json.profile.username, 'ProfilTarget');
+  assert.equal(byUsername.json.profile.displayName, 'Penjaga Desa');
+  assert.equal(byUsername.json.profile.bio, 'Penjaga *** ronda malam.\nSiap membantu tim!');
+  assert.equal(byUsername.json.profile.avatarUrl, 'preset:obor');
+  assert.equal(byUsername.json.profile.isVerified, false);
+  assert.equal(byUsername.json.profile.totalWins, 7);
+  assert.equal(byUsername.json.profile.isOnline, true);
+  assert.equal(byUsername.json.profile.friendshipStatus, 'none');
+  assert.equal(byUsername.json.profile.activeRoom, null);
+
+  // Lookup self by userId
+  const selfProfile = await api(`/api/friends/profile?userId=${viewer.json.user.id}`, {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(selfProfile.status, 200);
+  assert.equal(selfProfile.json.profile.isSelf, true);
+  assert.equal(selfProfile.json.profile.friendshipStatus, 'self');
+
+  // Unknown user and admin_lampor return 404 USER_NOT_FOUND
+  const unknownProfile = await api('/api/friends/profile?username=TidakAdaPemainXYZ', {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(unknownProfile.status, 404);
+  assert.equal(unknownProfile.json.code, 'USER_NOT_FOUND');
+
+  const adminProfile = await api('/api/friends/profile?username=admin_lampor', {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(adminProfile.status, 404);
+  assert.equal(adminProfile.json.code, 'USER_NOT_FOUND');
+
+  // Friend request -> outgoing_pending / incoming_pending -> friends with activeRoom & bio on friend card
+  const sendReq = await api('/api/friends/add', {
+    method: 'POST',
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+    body: { friendUserId: target.json.user.id },
+  });
+  assert.equal(sendReq.status, 200);
+
+  const outgoingProf = await api(`/api/friends/profile?userId=${target.json.user.id}`, {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(outgoingProf.status, 200);
+  assert.equal(outgoingProf.json.profile.friendshipStatus, 'outgoing_pending');
+
+  const incomingProf = await api(`/api/friends/profile?userId=${viewer.json.user.id}`, {
+    token: target.json.token,
+    ip: '10.0.15.2',
+  });
+  assert.equal(incomingProf.status, 200);
+  assert.equal(incomingProf.json.profile.friendshipStatus, 'incoming_pending');
+
+  const acceptReq = await api('/api/friends/accept', {
+    method: 'POST',
+    token: target.json.token,
+    ip: '10.0.15.2',
+    body: { requesterUserId: viewer.json.user.id },
+  });
+  assert.equal(acceptReq.status, 200);
+
+  // Target creates a room -> check room players displayName and friend profile activeRoom + bio
+  const createdRoom = await api('/api/rooms/create', {
+    method: 'POST',
+    token: target.json.token,
+    ip: '10.0.15.2',
+    body: {
+      name: 'Pos Ronda Malam',
+      mode: 'multiplayer',
+      maxPlayers: 4,
+      difficulty: 'normal',
+      canUseShopItems: true,
+    },
+  });
+  assert.equal(createdRoom.status, 201);
+  assert.equal(createdRoom.json.players[0].username, 'ProfilTarget');
+  assert.equal(createdRoom.json.players[0].displayName, 'Penjaga Desa');
+  assert.equal(createdRoom.json.players[0].avatarUrl, 'preset:obor');
+
+  // FallbackUser (no displayName set) joins -> displayName falls back to username
+  const joinFallback = await api('/api/rooms/join', {
+    method: 'POST',
+    token: fallbackUser.json.token,
+    ip: '10.0.15.3',
+    body: { roomId: createdRoom.json.room.id },
+  });
+  assert.equal(joinFallback.status, 200);
+  const hostInRoom = joinFallback.json.players.find((p) => p.userId === target.json.user.id);
+  const fallbackInRoom = joinFallback.json.players.find((p) => p.userId === fallbackUser.json.user.id);
+  assert.equal(hostInRoom.displayName, 'Penjaga Desa');
+  assert.equal(fallbackInRoom.username, 'ProfilPolos');
+  assert.equal(fallbackInRoom.displayName, 'ProfilPolos');
+
+  const syncRoom = await api('/api/rooms/sync', {
+    method: 'POST',
+    token: target.json.token,
+    ip: '10.0.15.2',
+    body: { roomId: createdRoom.json.room.id, lastEventSeq: 0 },
+  });
+  assert.equal(syncRoom.status, 200);
+  assert.equal(
+    syncRoom.json.players.find((p) => p.userId === target.json.user.id).displayName,
+    'Penjaga Desa'
+  );
+
+  // Friend list card includes bio, and friend profile includes activeRoom
+  const friendsList = await api('/api/friends/list', {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(friendsList.status, 200);
+  const friendCard = friendsList.json.friends.find((f) => f.id === target.json.user.id);
+  assert.equal(friendCard.bio, 'Penjaga *** ronda malam.\nSiap membantu tim!');
+
+  const friendProf = await api(`/api/friends/profile?userId=${target.json.user.id}`, {
+    token: viewer.json.token,
+    ip: '10.0.15.1',
+  });
+  assert.equal(friendProf.status, 200);
+  assert.equal(friendProf.json.profile.isFriend, true);
+  assert.equal(friendProf.json.profile.friendshipStatus, 'friends');
+  assert.equal(friendProf.json.profile.bio, 'Penjaga *** ronda malam.\nSiap membantu tim!');
+  assert.ok(friendProf.json.profile.activeRoom);
+  assert.equal(friendProf.json.profile.activeRoom.id, createdRoom.json.room.id);
+});
+
+test('Player message @username placeholder resolves per recipient while preserving template and emails', async () => {
+  const chAdmin = await solvePow('10.0.16.1');
+  const adminLogin = await api('/api/admin/login', {
+    method: 'POST',
+    ip: '10.0.16.1',
+    body: {
+      username: 'admin_lampor',
+      password: 'AdminPassword123',
+      challenge: chAdmin,
+      website: '',
+    },
+  });
+  assert.equal(adminLogin.status, 200);
+  const jar = parseSetCookieJar(adminLogin.setCookies);
+  const csrf = adminLogin.json.csrfToken;
+  const pA = await registerPlayer('FmtPlayerA', 'PassFmt123', '10.0.16.2');
+  const pB = await registerPlayer('FmtPlayerB', 'PassFmt123', '10.0.16.3');
+  assert.equal(pA.status, 201);
+  assert.equal(pB.status, 201);
+
+  const sendGlobal = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.16.1',
+    cookies: jar,
+    csrf,
+    body: {
+      action: 'send',
+      scope: 'global',
+      title: 'Halo @username!',
+      bodyMarkdown: 'Selamat datang **@username** (@USERNAME), info di help@username.com atau @username123.',
+    },
+  });
+  assert.equal(sendGlobal.status, 201);
+  assert.equal(sendGlobal.json.message.title, 'Halo @username!');
+  assert.ok(sendGlobal.json.message.bodyMarkdown.includes('**@username**'));
+  const gId = sendGlobal.json.message.id;
+
+  const sendDirect = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.16.1',
+    cookies: jar,
+    csrf,
+    body: {
+      action: 'send',
+      scope: 'user',
+      targetUsername: 'fmtplayerb',
+      title: 'Hadiah Khusus @username',
+      bodyMarkdown: 'Hai @username, hadiahmu sudah aktif.',
+    },
+  });
+  assert.equal(sendDirect.status, 201);
+  const dId = sendDirect.json.message.id;
+
+  // Admin list preserves raw @username placeholder
+  const adminList = await api('/api/admin/messages', { ip: '10.0.16.1', cookies: jar });
+  assert.equal(adminList.status, 200);
+  const adminG = adminList.json.messages.find((m) => m.id === gId);
+  assert.equal(adminG.title, 'Halo @username!');
+  assert.ok(adminG.bodyMarkdown.includes('**@username**'));
+
+  // Guest global-messages preserves raw @username
+  const guestRes = await api('/api/auth/global-messages', { ip: '10.0.16.4' });
+  assert.equal(guestRes.status, 200);
+  const guestG = guestRes.json.messages.find((m) => m.id === gId);
+  assert.equal(guestG.title, 'Halo @username!');
+
+  // Authenticated Player A receives personalized FmtPlayerA without corrupting emails/suffixes
+  const inboxA = await api('/api/auth/messages', { token: pA.json.token, ip: '10.0.16.2' });
+  assert.equal(inboxA.status, 200);
+  const msgA = inboxA.json.messages.find((m) => m.id === gId);
+  assert.equal(msgA.title, 'Halo FmtPlayerA!');
+  assert.equal(
+    msgA.bodyMarkdown,
+    'Selamat datang **FmtPlayerA** (FmtPlayerA), info di help@username.com atau @username123.'
+  );
+
+  // Authenticated Player B receives personalized FmtPlayerB in both global & direct messages
+  const inboxB = await api('/api/auth/messages', { token: pB.json.token, ip: '10.0.16.3' });
+  assert.equal(inboxB.status, 200);
+  const msgBG = inboxB.json.messages.find((m) => m.id === gId);
+  const msgBD = inboxB.json.messages.find((m) => m.id === dId);
+  assert.equal(msgBG.title, 'Halo FmtPlayerB!');
+  assert.equal(
+    msgBG.bodyMarkdown,
+    'Selamat datang **FmtPlayerB** (FmtPlayerB), info di help@username.com atau @username123.'
+  );
+  assert.equal(msgBD.title, 'Hadiah Khusus FmtPlayerB');
+  assert.equal(msgBD.bodyMarkdown, 'Hai FmtPlayerB, hadiahmu sudah aktif.');
+
+  await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.16.1',
+    cookies: jar,
+    csrf,
+    body: { action: 'delete', messageId: gId },
+  });
+  await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.16.1',
+    cookies: jar,
+    csrf,
+    body: { action: 'delete', messageId: dId },
+  });
+});

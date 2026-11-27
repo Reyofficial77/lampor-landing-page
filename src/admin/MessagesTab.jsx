@@ -9,6 +9,14 @@ import {
 } from './adminApi'
 
 const HTTP_URL_RE = /^https?:\/\//i
+const PLAYER_MSG_USERNAME_RE = /(^|[^a-zA-Z0-9_])@username(?![a-zA-Z0-9_])/gi
+
+function resolvePreviewUsername(text, previewName) {
+  const source = String(text || '')
+  const cleanName = String(previewName || '').trim().replace(/^@+/, '')
+  if (!source || !cleanName) return source
+  return source.replace(PLAYER_MSG_USERNAME_RE, (_match, prefix) => `${prefix}${cleanName}`)
+}
 
 function isSafeHttpUrl(rawUrl) {
   const trimmed = String(rawUrl || '').trim()
@@ -504,7 +512,8 @@ export default function MessagesTab({ refreshTick, autoTick, onNotify, onUnautho
               <p className="admin-field__hint">
                 Format: <code># Judul</code>, <code>**tebal**</code>, <code>*miring*</code>,{' '}
                 <code>`kode`</code>, <code>~~coret~~</code>, <code>- daftar</code>,{' '}
-                <code>&gt; kutipan</code>, <code>[tautan](https://...)</code>
+                <code>&gt; kutipan</code>, <code>[tautan](https://...)</code>,{' '}
+                <code>@username</code> (otomatis diganti username pemain penerima)
               </p>
             </div>
 
@@ -513,13 +522,35 @@ export default function MessagesTab({ refreshTick, autoTick, onNotify, onUnautho
                 Pratinjau Markdown
               </span>
               <div className="admin-md-preview" aria-labelledby="msg-preview-label">
-                {bodyMarkdown.trim() ? (
-                  <SafeMarkdown text={bodyMarkdown} />
-                ) : (
-                  <p className="admin-md-preview__empty">
-                    Pratinjau isi pesan akan muncul di sini saat Anda mulai menulis.
-                  </p>
-                )}
+                {(() => {
+                  const previewUsername =
+                    scope === 'user'
+                      ? targetUsername.trim().replace(/^@+/, '') || 'contoh_pemain'
+                      : 'contoh_pemain'
+                  const previewTitle = title.trim()
+                    ? resolvePreviewUsername(title.trim(), previewUsername)
+                    : ''
+                  const previewBody = resolvePreviewUsername(bodyMarkdown, previewUsername)
+                  if (!previewTitle && !bodyMarkdown.trim()) {
+                    return (
+                      <p className="admin-md-preview__empty">
+                        Pratinjau isi pesan akan muncul di sini saat Anda mulai menulis.
+                      </p>
+                    )
+                  }
+                  return (
+                    <>
+                      {previewTitle && <h4 className="admin-msg-card__title">{previewTitle}</h4>}
+                      {bodyMarkdown.trim() ? (
+                        <SafeMarkdown text={previewBody} />
+                      ) : (
+                        <p className="admin-md-preview__empty">
+                          Pratinjau isi pesan akan muncul di sini saat Anda mulai menulis.
+                        </p>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             </div>
           </div>
@@ -605,7 +636,12 @@ export default function MessagesTab({ refreshTick, autoTick, onNotify, onUnautho
                         </span>
                       </div>
                       <h3 className="admin-msg-card__title">
-                        {msg.title || 'Pesan Tanpa Judul'}
+                        {isUserScope
+                          ? resolvePreviewUsername(
+                              msg.title || 'Pesan Tanpa Judul',
+                              msg.targetUsername
+                            )
+                          : msg.title || 'Pesan Tanpa Judul'}
                       </h3>
                     </div>
 
@@ -620,7 +656,13 @@ export default function MessagesTab({ refreshTick, autoTick, onNotify, onUnautho
                   </div>
 
                   <div className="admin-msg-card__body">
-                    <SafeMarkdown text={msg.bodyMarkdown} />
+                    <SafeMarkdown
+                      text={
+                        isUserScope
+                          ? resolvePreviewUsername(msg.bodyMarkdown, msg.targetUsername)
+                          : msg.bodyMarkdown
+                      }
+                    />
                   </div>
                 </article>
               )

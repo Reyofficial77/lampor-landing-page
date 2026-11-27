@@ -690,9 +690,15 @@ export function serializeAdminUserRow(user) {
 }
 
 export function serializeRoomPlayer(player) {
+  const cleanUsername = censorProfanity(player.username || '');
+  const cleanDisplayName = censorProfanity(
+    sanitizeProfileText(player.display_name || '', 32, false)
+  );
   return {
     userId: player.user_id,
-    username: censorProfanity(player.username || ''),
+    username: cleanUsername,
+    displayName: cleanDisplayName || cleanUsername,
+    avatarUrl: sanitizeAvatarUrl(player.avatar_url || '') ?? '',
     isHost: Boolean(player.is_host),
     isReady: Boolean(player.is_ready),
     isVerified: Boolean(player.is_verified),
@@ -792,6 +798,7 @@ export function serializePublicPlayerCard(
     username: cleanUsername,
     displayName: cleanDisplayName || cleanUsername,
     avatarUrl: sanitizeAvatarUrl(user.avatar_url || '') ?? '',
+    bio: censorProfanity(sanitizeProfileText(user.bio || '', 200, true)),
     isVerified: Boolean(user.is_verified),
     totalWins: Math.max(0, Number(user.total_wins ?? 0)),
     coins: Math.min(999999999, Math.max(0, Number(user.coins ?? 0))),
@@ -922,14 +929,28 @@ export function serializeRedeemCode(row) {
   };
 }
 
-export function serializePlayerMessage(row) {
+const PLAYER_MESSAGE_USERNAME_RE = /(^|[^a-zA-Z0-9_])@username(?![a-zA-Z0-9_])/gi;
+
+export function formatPlayerMessageText(text, recipientUsername = '') {
+  const source = typeof text === 'string' ? text : '';
+  const cleanName = typeof recipientUsername === 'string' ? recipientUsername.trim() : '';
+  if (!source || !cleanName) {
+    return source;
+  }
+  return source.replace(PLAYER_MESSAGE_USERNAME_RE, (_match, prefix) => `${prefix}${cleanName}`);
+}
+
+export function serializePlayerMessage(row, opts = {}) {
+  const recipientUsername = typeof opts?.recipientUsername === 'string' ? opts.recipientUsername.trim() : '';
+  const rawTitle = row.title || '';
+  const rawBody = row.body_markdown || '';
   return {
     id: row.id,
     scope: row.scope,
     targetUserId: row.target_user_id || '',
     targetUsername: row.target_username || '',
-    title: row.title || '',
-    bodyMarkdown: row.body_markdown || '',
+    title: recipientUsername ? formatPlayerMessageText(rawTitle, recipientUsername) : rawTitle,
+    bodyMarkdown: recipientUsername ? formatPlayerMessageText(rawBody, recipientUsername) : rawBody,
     senderUsername: row.sender_username || 'admin',
     isRead: Boolean(row.is_read),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : (row.created_at || null),

@@ -1953,10 +1953,15 @@ function getMemRoomPlayersArray(roomId) {
   if (!map) return [];
   return Array.from(map.values())
     .sort((a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime())
-    .map((p) => ({
-      ...p,
-      is_verified: Boolean(mem.users.get(p.user_id)?.is_verified),
-    }));
+    .map((p) => {
+      const user = mem.users.get(p.user_id);
+      return {
+        ...p,
+        display_name: user?.display_name || '',
+        avatar_url: user?.avatar_url || '',
+        is_verified: Boolean(user?.is_verified),
+      };
+    });
 }
 
 async function appendRoomEvent({ roomId, senderUserId = null, senderUsername = '', eventType, payload = {} }) {
@@ -2045,7 +2050,11 @@ export async function getRoomPlayers(roomId) {
   }
   const sql = getSql();
   const rows = await sql`
-    SELECT rp.*, COALESCE(u.is_verified, FALSE) AS is_verified
+    SELECT
+      rp.*,
+      COALESCE(u.display_name, '') AS display_name,
+      COALESCE(u.avatar_url, '') AS avatar_url,
+      COALESCE(u.is_verified, FALSE) AS is_verified
     FROM room_players rp
     LEFT JOIN users u ON u.id = rp.user_id
     WHERE rp.room_id = ${roomId}
@@ -2053,6 +2062,8 @@ export async function getRoomPlayers(roomId) {
   `;
   return rows.map((p) => ({
     ...p,
+    display_name: p.display_name || '',
+    avatar_url: p.avatar_url || '',
     is_verified: Boolean(p.is_verified),
     player_state: parseJsonField(p.player_state, {}),
   }));
@@ -3421,6 +3432,92 @@ export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit 
       activeRoomRaw: isFriend ? roomMap.get(r.id) || null : null,
     };
   });
+}
+
+export async function getPlayerPresenceAndRelationship(viewerUserId, targetUserId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    const target = mem.users.get(targetUserId);
+    const presence = getMemUserPresence(
+      targetUserId,
+      target?.last_login_at || null,
+      Date.now(),
+      Boolean(target?.is_banned)
+    );
+    const isSelf = viewerUserId === targetUserId;
+    const isFriend =
+      !isSelf &&
+      Boolean(
+        mem.friendships.get(viewerUserId)?.has(targetUserId) &&
+          mem.friendships.get(targetUserId)?.has(viewerUserId)
+      );
+    const hasIncomingRequest =
+      !isSelf && !isFriend && Boolean(mem.friendRequests.get(viewerUserId)?.has(targetUserId));
+    const hasOutgoingRequest =
+      !isSelf && !isFriend && Boolean(mem.friendRequests.get(targetUserId)?.has(viewerUserId));
+    const roomMap = isFriend ? await getActiveRoomMapForUsers([targetUserId]) : new Map();
+    return {
+      is_online: presence.is_online,
+      last_seen_at: presence.last_seen_at,
+      isSelf,
+      isFriend,
+      hasIncomingRequest,
+      hasOutgoingRequest,
+      activeRoomRaw: roomMap.get(targetUserId) || null,
+    };
+  }
+
+  const sql = getSql();
+  const onlineCutoffIso = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+  const rows = await sql`
+    SELECT
+      (
+        u.is_banned = FALSE
+        AND EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.user_id = u.id
+            AND s.session_type <> 'admin'
+            AND s.revoked_at IS NULL
+            AND s.expires_at > NOW()
+            AND s.last_seen_at >= ${onlineCutoffIso}::timestamptz
+        )
+      ) AS is_online,
+      COALESCE(
+        (SELECT MAX(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id AND s.session_type <> 'admin'),
+        u.last_login_at
+      ) AS last_seen_at,
+      EXISTS (
+        SELECT 1 FROM friendships f
+        JOIN friendships f2 ON f2.user_id = f.friend_id AND f2.friend_id = f.user_id
+        WHERE f.user_id = ${viewerUserId} AND f.friend_id = u.id
+      ) AS is_friend,
+      EXISTS (
+        SELECT 1 FROM friend_requests fr
+        WHERE fr.requester_id = u.id AND fr.recipient_id = ${viewerUserId}
+      ) AS has_incoming_request,
+      EXISTS (
+        SELECT 1 FROM friend_requests fr
+        WHERE fr.requester_id = ${viewerUserId} AND fr.recipient_id = u.id
+      ) AS has_outgoing_request
+    FROM users u
+    WHERE u.id = ${targetUserId}
+    LIMIT 1
+  `;
+  const row = rows[0];
+  const isSelf = viewerUserId === targetUserId;
+  const isFriend = !isSelf && Boolean(row?.is_friend);
+  const hasIncomingRequest = !isSelf && !isFriend && Boolean(row?.has_incoming_request);
+  const hasOutgoingRequest = !isSelf && !isFriend && Boolean(row?.has_outgoing_request);
+  const roomMap = isFriend ? await getActiveRoomMapForUsers([targetUserId]) : new Map();
+  return {
+    is_online: Boolean(row?.is_online),
+    last_seen_at: row?.last_seen_at || null,
+    isSelf,
+    isFriend,
+    hasIncomingRequest,
+    hasOutgoingRequest,
+    activeRoomRaw: isFriend ? roomMap.get(targetUserId) || null : null,
+  };
 }
 
 export async function createPlayerMessage({

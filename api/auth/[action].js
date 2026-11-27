@@ -446,7 +446,7 @@ export default async function handler(req, res) {
     const rows = await db.listGlobalInboxMessages({ limit: 30 });
     return sendJson(res, 200, {
       ok: true,
-      messages: rows.map(serializePlayerMessage),
+      messages: rows.map((row) => serializePlayerMessage(row)),
     });
   }
 
@@ -469,7 +469,7 @@ export default async function handler(req, res) {
       ]);
       return sendJson(res, 200, {
         ok: true,
-        messages: rows.map(serializePlayerMessage),
+        messages: rows.map((row) => serializePlayerMessage(row, { recipientUsername: auth.user.username })),
         unreadCount,
       });
     }
