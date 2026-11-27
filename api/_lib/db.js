@@ -6,6 +6,7 @@ import {
   normalizeRedeemedCodes,
   sanitizeAvatarUrl,
   sanitizeDeepValue,
+  sanitizeMarkdownBody,
   sanitizeProfileText,
   sanitizeText,
   sanitizeVoicePayload,
@@ -100,6 +101,8 @@ function createInitialMemoryState() {
     ipBlocks: new Map(),
     rateLimits: new Map(),
     redeemCodes: new Map(),
+    playerMessages: [],
+    playerMessageReads: new Set(),
   };
 }
 
@@ -457,6 +460,30 @@ async function runNeonSchemaInit() {
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS player_messages (
+      id UUID PRIMARY KEY,
+      scope TEXT NOT NULL CHECK (scope IN ('global', 'user')),
+      target_user_id UUID NULL REFERENCES users(id) ON DELETE CASCADE,
+      target_username TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL DEFAULT '',
+      body_markdown TEXT NOT NULL,
+      sender_username TEXT NOT NULL DEFAULT 'admin',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_player_messages_created ON player_messages (created_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_player_messages_target ON player_messages (target_user_id, created_at DESC)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS player_message_reads (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      message_id UUID NOT NULL REFERENCES player_messages(id) ON DELETE CASCADE,
+      read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, message_id)
     )
   `;
 
@@ -3394,4 +3421,196 @@ export async function listTopOrSearchPlayers({ viewerUserId, search = '', limit 
       activeRoomRaw: isFriend ? roomMap.get(r.id) || null : null,
     };
   });
+}
+
+export async function createPlayerMessage({
+  scope,
+  targetUserId = null,
+  targetUsername = '',
+  title = '',
+  bodyMarkdown,
+  senderUsername = 'admin',
+}) {
+  await ensureSchema();
+  const id = crypto.randomUUID();
+  const cleanScope = scope === 'user' ? 'user' : 'global';
+  const cleanTargetUserId = cleanScope === 'user' && targetUserId ? targetUserId : null;
+  const cleanTargetUsername = cleanScope === 'user' ? sanitizeText(targetUsername, 40) : '';
+  const cleanTitle = sanitizeText(title, 120);
+  const cleanBody = sanitizeMarkdownBody(bodyMarkdown, 4000);
+  const cleanSender = sanitizeText(senderUsername || 'admin', 40) || 'admin';
+
+  if (isMemoryMode()) {
+    const row = {
+      id,
+      scope: cleanScope,
+      target_user_id: cleanTargetUserId,
+      target_username: cleanTargetUsername,
+      title: cleanTitle,
+      body_markdown: cleanBody,
+      sender_username: cleanSender,
+      created_at: new Date(),
+    };
+    mem.playerMessages.unshift(row);
+    return { ...row };
+  }
+
+  const sql = getSql();
+  const rows = await sql`
+    INSERT INTO player_messages (
+      id, scope, target_user_id, target_username, title, body_markdown, sender_username
+    ) VALUES (
+      ${id}, ${cleanScope}, ${cleanTargetUserId}, ${cleanTargetUsername},
+      ${cleanTitle}, ${cleanBody}, ${cleanSender}
+    )
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function listAdminPlayerMessages({ limit = 100 } = {}) {
+  await ensureSchema();
+  const safeLimit = Math.min(200, Math.max(1, Math.trunc(Number(limit) || 100)));
+  if (isMemoryMode()) {
+    return [...mem.playerMessages]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, safeLimit)
+      .map((m) => ({ ...m }));
+  }
+  const sql = getSql();
+  return sql`
+    SELECT * FROM player_messages
+    ORDER BY created_at DESC
+    LIMIT ${safeLimit}
+  `;
+}
+
+export async function deletePlayerMessage(messageId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    const idx = mem.playerMessages.findIndex((m) => m.id === messageId);
+    if (idx === -1) return null;
+    const [removed] = mem.playerMessages.splice(idx, 1);
+    const suffix = `:${messageId}`;
+    for (const key of Array.from(mem.playerMessageReads)) {
+      if (key.endsWith(suffix)) {
+        mem.playerMessageReads.delete(key);
+      }
+    }
+    return { ...removed };
+  }
+  const sql = getSql();
+  const rows = await sql`
+    DELETE FROM player_messages
+    WHERE id = ${messageId}
+    RETURNING *
+  `;
+  return rows[0] || null;
+}
+
+export async function listInboxMessagesForUser(userId, { limit = 50 } = {}) {
+  await ensureSchema();
+  const safeLimit = Math.min(200, Math.max(1, Math.trunc(Number(limit) || 50)));
+  if (isMemoryMode()) {
+    return [...mem.playerMessages]
+      .filter((m) => m.scope === 'global' || m.target_user_id === userId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, safeLimit)
+      .map((m) => ({
+        ...m,
+        is_read: mem.playerMessageReads.has(`${userId}:${m.id}`),
+      }));
+  }
+  const sql = getSql();
+  return sql`
+    SELECT
+      pm.*,
+      (pmr.message_id IS NOT NULL) AS is_read
+    FROM player_messages pm
+    LEFT JOIN player_message_reads pmr
+      ON pmr.message_id = pm.id AND pmr.user_id = ${userId}
+    WHERE pm.scope = 'global' OR pm.target_user_id = ${userId}
+    ORDER BY pm.created_at DESC
+    LIMIT ${safeLimit}
+  `;
+}
+
+export async function listGlobalInboxMessages({ limit = 30 } = {}) {
+  await ensureSchema();
+  const safeLimit = Math.min(200, Math.max(1, Math.trunc(Number(limit) || 30)));
+  if (isMemoryMode()) {
+    return [...mem.playerMessages]
+      .filter((m) => m.scope === 'global')
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, safeLimit)
+      .map((m) => ({
+        ...m,
+        is_read: false,
+      }));
+  }
+  const sql = getSql();
+  return sql`
+    SELECT *, FALSE AS is_read
+    FROM player_messages
+    WHERE scope = 'global'
+    ORDER BY created_at DESC
+    LIMIT ${safeLimit}
+  `;
+}
+
+export async function countUnreadInboxMessagesForUser(userId) {
+  await ensureSchema();
+  if (isMemoryMode()) {
+    let count = 0;
+    for (const m of mem.playerMessages) {
+      if ((m.scope === 'global' || m.target_user_id === userId) && !mem.playerMessageReads.has(`${userId}:${m.id}`)) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+  const sql = getSql();
+  const rows = await sql`
+    SELECT COUNT(*)::int AS cnt
+    FROM player_messages pm
+    LEFT JOIN player_message_reads pmr
+      ON pmr.message_id = pm.id AND pmr.user_id = ${userId}
+    WHERE (pm.scope = 'global' OR pm.target_user_id = ${userId})
+      AND pmr.message_id IS NULL
+  `;
+  return Number(rows[0]?.cnt ?? 0);
+}
+
+export async function markInboxMessagesRead(userId, messageIds = null) {
+  await ensureSchema();
+  const hasIds = Array.isArray(messageIds) && messageIds.length > 0;
+  if (isMemoryMode()) {
+    const idSet = hasIds ? new Set(messageIds) : null;
+    for (const m of mem.playerMessages) {
+      if (m.scope !== 'global' && m.target_user_id !== userId) continue;
+      if (idSet && !idSet.has(m.id)) continue;
+      mem.playerMessageReads.add(`${userId}:${m.id}`);
+    }
+    return countUnreadInboxMessagesForUser(userId);
+  }
+  const sql = getSql();
+  if (hasIds) {
+    await sql`
+      INSERT INTO player_message_reads (user_id, message_id)
+      SELECT ${userId}, pm.id
+      FROM player_messages pm
+      WHERE (pm.scope = 'global' OR pm.target_user_id = ${userId})
+        AND pm.id = ANY(${messageIds}::uuid[])
+      ON CONFLICT (user_id, message_id) DO NOTHING
+    `;
+  } else {
+    await sql`
+      INSERT INTO player_message_reads (user_id, message_id)
+      SELECT ${userId}, pm.id
+      FROM player_messages pm
+      WHERE pm.scope = 'global' OR pm.target_user_id = ${userId}
+      ON CONFLICT (user_id, message_id) DO NOTHING
+    `;
+  }
+  return countUnreadInboxMessagesForUser(userId);
 }

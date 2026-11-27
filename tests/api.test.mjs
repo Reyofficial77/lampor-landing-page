@@ -1899,3 +1899,252 @@ test('Sliding player session TTL and friends-only singleplayer joinable rooms (w
   assert.equal(friendJoinAct3.status, 409);
   assert.equal(friendJoinAct3.json.code, 'ACT_3_JOIN_BLOCKED');
 });
+
+test('Admin & Player messages: global/user targeting, Markdown preservation, isolation, mark_read, guest global-messages, and delete', async () => {
+  // Unauthenticated admin messages blocked
+  assert.equal((await api('/api/admin/messages', { ip: '10.0.14.1' })).status, 401);
+  assert.equal(
+    (await api('/api/admin/messages', { method: 'POST', ip: '10.0.14.1', body: { action: 'send', scope: 'global', bodyMarkdown: 'Hi' } })).status,
+    401
+  );
+
+  // Unauthenticated player inbox blocked
+  assert.equal((await api('/api/auth/messages', { ip: '10.0.14.1' })).status, 401);
+
+  // Register two players
+  const playerA = await registerPlayer('PesanPemainA', 'PesanPass123', '10.0.14.2');
+  const playerB = await registerPlayer('PesanPemainB', 'PesanPass123', '10.0.14.3');
+  assert.equal(playerA.status, 201);
+  assert.equal(playerB.status, 201);
+  const tokenA = playerA.json.token;
+  const tokenB = playerB.json.token;
+
+  // Admin login
+  const chAdmin = await solvePow('10.0.14.4');
+  const adminLogin = await api('/api/admin/login', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    body: {
+      username: 'admin_lampor',
+      password: 'AdminPassword123',
+      challenge: chAdmin,
+      website: '',
+    },
+  });
+  assert.equal(adminLogin.status, 200);
+  const jar = parseSetCookieJar(adminLogin.setCookies);
+  const csrf = adminLogin.json.csrfToken;
+
+  // CSRF required on POST /api/admin/messages
+  const missingCsrf = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    body: { action: 'send', scope: 'global', bodyMarkdown: 'Tanpa CSRF' },
+  });
+  assert.equal(missingCsrf.status, 403);
+  assert.equal(missingCsrf.json.code, 'CSRF_INVALID');
+
+  // Empty bodyMarkdown rejected with 400 VALIDATION_ERROR
+  const emptyBody = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: { action: 'send', scope: 'global', title: 'Kosong', bodyMarkdown: '   \u0000\x07  ' },
+  });
+  assert.equal(emptyBody.status, 400);
+  assert.equal(emptyBody.json.code, 'VALIDATION_ERROR');
+
+  // Target unknown user -> 404 USER_NOT_FOUND
+  const unknownTarget = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: {
+      action: 'send',
+      scope: 'user',
+      targetUsername: 'TidakAdaPemain999',
+      title: 'Halo',
+      bodyMarkdown: 'Tes pesan',
+    },
+  });
+  assert.equal(unknownTarget.status, 404);
+  assert.equal(unknownTarget.json.code, 'USER_NOT_FOUND');
+
+  // Target dashboard admin -> 400 INVALID_TARGET_USER
+  const adminTarget = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: {
+      action: 'send',
+      scope: 'user',
+      targetUsername: 'admin_lampor',
+      title: 'Admin',
+      bodyMarkdown: 'Pesan ke admin',
+    },
+  });
+  assert.equal(adminTarget.status, 400);
+  assert.equal(adminTarget.json.code, 'INVALID_TARGET_USER');
+
+  // Send global message with rich Markdown & control chars to sanitize
+  const rawMarkdown = '# Pengumuman Desa\r\n\r\n**Penting:** _Waspada_ ~~kabut~~ `lilin`.\r\n> Tetap bersama tim.\r\n- Bawa [Jamu](https://lampor.example)\u0000\x07';
+  const expectedMarkdown = '# Pengumuman Desa\n\n**Penting:** _Waspada_ ~~kabut~~ `lilin`.\n> Tetap bersama tim.\n- Bawa [Jamu](https://lampor.example)';
+
+  const sendGlobal = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: {
+      action: 'send',
+      scope: 'global',
+      title: '<b>Update</b> Server',
+      bodyMarkdown: rawMarkdown,
+    },
+  });
+  assert.equal(sendGlobal.status, 201);
+  assert.equal(sendGlobal.json.ok, true);
+  assert.equal(sendGlobal.json.message.scope, 'global');
+  assert.equal(sendGlobal.json.message.title, 'Update Server');
+  assert.equal(sendGlobal.json.message.bodyMarkdown, expectedMarkdown);
+  assert.equal(sendGlobal.json.message.senderUsername, 'admin_lampor');
+  const globalMsgId = sendGlobal.json.message.id;
+
+  // Send targeted message to Player A (case-insensitive username lookup)
+  const sendToA = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: {
+      action: 'send',
+      scope: 'user',
+      targetUsername: 'pesanpemaina',
+      title: 'Hadiah Khusus A',
+      bodyMarkdown: 'Halo **PesanPemainA**, cek kode `LAMPORGIFT`.',
+    },
+  });
+  assert.equal(sendToA.status, 201);
+  assert.equal(sendToA.json.message.scope, 'user');
+  assert.equal(sendToA.json.message.targetUserId, playerA.json.user.id);
+  assert.equal(sendToA.json.message.targetUsername, 'PesanPemainA');
+  const msgToAId = sendToA.json.message.id;
+
+  // Send targeted message to Player B
+  const sendToB = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: {
+      action: 'send',
+      scope: 'user',
+      targetUsername: 'PesanPemainB',
+      title: 'Pesan Rahasia B',
+      bodyMarkdown: 'Hanya untuk **PesanPemainB**.',
+    },
+  });
+  assert.equal(sendToB.status, 201);
+  const msgToBId = sendToB.json.message.id;
+
+  // Admin GET /api/admin/messages lists all 3 messages
+  const adminList = await api('/api/admin/messages', { ip: '10.0.14.4', cookies: jar });
+  assert.equal(adminList.status, 200);
+  assert.equal(adminList.json.messages.length >= 3, true);
+  assert.ok(adminList.json.messages.some((m) => m.id === globalMsgId));
+  assert.ok(adminList.json.messages.some((m) => m.id === msgToAId));
+  assert.ok(adminList.json.messages.some((m) => m.id === msgToBId));
+
+  // Guest GET /api/auth/global-messages returns ONLY global messages (no targeted messages leaked)
+  const guestGlobal = await api('/api/auth/global-messages', { ip: '10.0.14.5' });
+  assert.equal(guestGlobal.status, 200);
+  assert.equal(guestGlobal.json.ok, true);
+  assert.ok(guestGlobal.json.messages.some((m) => m.id === globalMsgId));
+  assert.equal(guestGlobal.json.messages.some((m) => m.id === msgToAId || m.id === msgToBId), false);
+
+  // /api/auth/me includes unreadMessagesCount
+  const meA = await api('/api/auth/me', { token: tokenA, ip: '10.0.14.2' });
+  assert.equal(meA.status, 200);
+  assert.equal(meA.json.unreadMessagesCount, 2);
+
+  const meB = await api('/api/auth/me', { token: tokenB, ip: '10.0.14.3' });
+  assert.equal(meB.status, 200);
+  assert.equal(meB.json.unreadMessagesCount, 2);
+
+  // Visibility isolation: Player A sees global + msgToA, NOT msgToB
+  const inboxA = await api('/api/auth/messages', { token: tokenA, ip: '10.0.14.2' });
+  assert.equal(inboxA.status, 200);
+  assert.equal(inboxA.json.unreadCount, 2);
+  assert.ok(inboxA.json.messages.some((m) => m.id === globalMsgId && m.isRead === false));
+  assert.ok(inboxA.json.messages.some((m) => m.id === msgToAId && m.isRead === false));
+  assert.equal(inboxA.json.messages.some((m) => m.id === msgToBId), false);
+
+  // Visibility isolation: Player B sees global + msgToB, NOT msgToA
+  const inboxB = await api('/api/auth/messages', { token: tokenB, ip: '10.0.14.3' });
+  assert.equal(inboxB.status, 200);
+  assert.equal(inboxB.json.unreadCount, 2);
+  assert.ok(inboxB.json.messages.some((m) => m.id === globalMsgId && m.isRead === false));
+  assert.ok(inboxB.json.messages.some((m) => m.id === msgToBId && m.isRead === false));
+  assert.equal(inboxB.json.messages.some((m) => m.id === msgToAId), false);
+
+  // Player A marks only msgToAId (plus ignores msgToBId if passed) as read
+  const markOneA = await api('/api/auth/messages', {
+    method: 'POST',
+    token: tokenA,
+    ip: '10.0.14.2',
+    body: { action: 'mark_read', messageIds: [msgToAId, msgToBId] },
+  });
+  assert.equal(markOneA.status, 200);
+  assert.equal(markOneA.json.unreadCount, 1);
+
+  const inboxAAfterOne = await api('/api/auth/messages', { token: tokenA, ip: '10.0.14.2' });
+  assert.equal(inboxAAfterOne.json.messages.find((m) => m.id === msgToAId).isRead, true);
+  assert.equal(inboxAAfterOne.json.messages.find((m) => m.id === globalMsgId).isRead, false);
+
+  // Player B's unread count must remain untouched
+  const meBAfterA = await api('/api/auth/me', { token: tokenB, ip: '10.0.14.3' });
+  assert.equal(meBAfterA.json.unreadMessagesCount, 2);
+
+  // Player A marks all remaining messages read (no messageIds)
+  const markAllA = await api('/api/auth/messages', {
+    method: 'POST',
+    token: tokenA,
+    ip: '10.0.14.2',
+    body: { action: 'mark_read' },
+  });
+  assert.equal(markAllA.status, 200);
+  assert.equal(markAllA.json.unreadCount, 0);
+
+  const meAAfterAll = await api('/api/auth/me', { token: tokenA, ip: '10.0.14.2' });
+  assert.equal(meAAfterAll.json.unreadMessagesCount, 0);
+
+  // Admin deletes global message -> Player B unread drops from 2 to 1 and global-messages no longer includes it
+  const delGlobal = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: { action: 'delete', messageId: globalMsgId },
+  });
+  assert.equal(delGlobal.status, 200);
+  assert.equal(delGlobal.json.messages.some((m) => m.id === globalMsgId), false);
+
+  const delAgain = await api('/api/admin/messages', {
+    method: 'POST',
+    ip: '10.0.14.4',
+    cookies: jar,
+    csrf,
+    body: { action: 'delete', messageId: globalMsgId },
+  });
+  assert.equal(delAgain.status, 404);
+
+  const meBAfterDel = await api('/api/auth/me', { token: tokenB, ip: '10.0.14.3' });
+  assert.equal(meBAfterDel.json.unreadMessagesCount, 1);
+
+  const guestGlobalAfterDel = await api('/api/auth/global-messages', { ip: '10.0.14.5' });
+  assert.equal(guestGlobalAfterDel.json.messages.some((m) => m.id === globalMsgId), false);
+});

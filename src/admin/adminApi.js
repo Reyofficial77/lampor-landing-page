@@ -253,6 +253,26 @@ export function postRedeemAction(payload) {
   })
 }
 
+export function listAdminMessages() {
+  return requestJson('/api/admin/messages', { method: 'GET' })
+}
+
+export function sendAdminMessage(payload) {
+  return requestJson('/api/admin/messages', {
+    method: 'POST',
+    body: { action: 'send', ...payload },
+    requireCsrf: true,
+  })
+}
+
+export function deleteAdminMessage(messageId) {
+  return requestJson('/api/admin/messages', {
+    method: 'POST',
+    body: { action: 'delete', messageId },
+    requireCsrf: true,
+  })
+}
+
 export function normalizeServerSettings(raw = {}) {
   const s = raw || {}
   return {
@@ -332,6 +352,19 @@ export function normalizeRedeemCode(raw = {}) {
     descriptionId: raw.descriptionId ?? raw.description_id ?? '',
     descriptionEn: raw.descriptionEn ?? raw.description_en ?? '',
     isActive: Boolean(raw.isActive ?? raw.is_active ?? true),
+    createdAt: raw.createdAt ?? raw.created_at ?? null,
+  }
+}
+
+export function normalizePlayerMessage(raw = {}) {
+  return {
+    id: raw.id ?? raw.messageId ?? raw.message_id ?? '',
+    scope: raw.scope === 'user' ? 'user' : 'global',
+    targetUserId: raw.targetUserId ?? raw.target_user_id ?? null,
+    targetUsername: raw.targetUsername ?? raw.target_username ?? '',
+    title: raw.title ?? '',
+    bodyMarkdown: raw.bodyMarkdown ?? raw.body_markdown ?? '',
+    senderUsername: raw.senderUsername ?? raw.sender_username ?? 'admin',
     createdAt: raw.createdAt ?? raw.created_at ?? null,
   }
 }

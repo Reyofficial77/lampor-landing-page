@@ -20,6 +20,7 @@ import {
   sanitizeProfileText,
   sanitizeText,
   sendJson,
+  serializePlayerMessage,
   serializePlayerUser,
   strongPasswordSchema,
   usernameSchema,
@@ -56,6 +57,11 @@ const profileSchema = z.strictObject({
   bio: z.string().max(240).optional(),
   avatarUrl: z.string().max(20000).optional(),
   avatarFilename: z.string().max(128).optional(),
+});
+
+const messagesMarkReadSchema = z.strictObject({
+  action: z.literal('mark_read'),
+  messageIds: z.array(z.string().uuid()).max(100).optional(),
 });
 
 const PLAYER_SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000;
@@ -328,7 +334,11 @@ export default async function handler(req, res) {
     }
     const auth = await requirePlayerSession(req, res, db);
     if (!auth) return;
-    return sendJson(res, 200, { ok: true, user: serializePlayerUser(auth.user) });
+    return sendJson(res, 200, {
+      ok: true,
+      user: serializePlayerUser(auth.user),
+      unreadMessagesCount: await db.countUnreadInboxMessagesForUser(auth.user.id),
+    });
   }
 
   if (action === 'sync') {
@@ -425,6 +435,58 @@ export default async function handler(req, res) {
       avatarFilename: safeAvatarFilename,
       user: serializePlayerUser(updated),
     });
+  }
+
+  if (action === 'global-messages') {
+    const pre = await runSecurityPreflight(req, res, db, { rateCategory: 'sync' });
+    if (pre.handled) return;
+    if (req.method !== 'GET') {
+      return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
+    }
+    const rows = await db.listGlobalInboxMessages({ limit: 30 });
+    return sendJson(res, 200, {
+      ok: true,
+      messages: rows.map(serializePlayerMessage),
+    });
+  }
+
+  if (action === 'messages') {
+    const pre = await runSecurityPreflight(req, res, db, {
+      rateCategory: 'sync',
+      parseBody: req.method === 'POST',
+    });
+    if (pre.handled) return;
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
+    }
+    const auth = await requirePlayerSession(req, res, db);
+    if (!auth) return;
+
+    if (req.method === 'GET') {
+      const [rows, unreadCount] = await Promise.all([
+        db.listInboxMessagesForUser(auth.user.id, { limit: 50 }),
+        db.countUnreadInboxMessagesForUser(auth.user.id),
+      ]);
+      return sendJson(res, 200, {
+        ok: true,
+        messages: rows.map(serializePlayerMessage),
+        unreadCount,
+      });
+    }
+
+    const parsed = messagesMarkReadSchema.safeParse(pre.body);
+    if (!parsed.success) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: formatZodError(parsed.error),
+        code: 'VALIDATION_ERROR',
+      });
+    }
+    const unreadCount = await db.markInboxMessagesRead(
+      auth.user.id,
+      parsed.data.messageIds || null
+    );
+    return sendJson(res, 200, { ok: true, unreadCount });
   }
 
   const pre = await runSecurityPreflight(req, res, db, { rateCategory: 'general' });

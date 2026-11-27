@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './admin.css'
 import AdminLogin from './AdminLogin'
+import MessagesTab from './MessagesTab'
 import OverviewTab from './OverviewTab'
 import RoomsTab from './RoomsTab'
 import SecurityTab from './SecurityTab'
@@ -33,6 +34,12 @@ const NAV_GROUPS = [
         label: 'Server Multiplayer',
         subtitle: 'Pantau room Co-op dan Sandbox, kick pemain, dan pengumuman',
         icon: 'rooms',
+      },
+      {
+        id: 'messages',
+        label: 'Pesan Pemain',
+        subtitle: 'Kirim pesan Markdown ke kotak masuk global atau pemain tertentu',
+        icon: 'mail',
       },
     ],
   },
@@ -92,6 +99,12 @@ function NavGlyph({ name }) {
           <path d="M12 3L4 6V12C4 16.8 7.4 20.6 12 22C16.6 20.6 20 16.8 20 12V6L12 3Z" />
           <line x1="12" y1="8" x2="12" y2="13" />
           <line x1="12" y1="16" x2="12.01" y2="16" />
+        </>
+      )}
+      {name === 'mail' && (
+        <>
+          <rect x="3" y="5" width="18" height="14" />
+          <polyline points="3 7 12 13 21 7" />
         </>
       )}
     </svg>
@@ -426,6 +439,14 @@ export default function AdminApp({ onNavigateHome }) {
           )}
           {activeTab === 'rooms' && (
             <RoomsTab
+              refreshTick={refreshTick}
+              autoTick={autoTick}
+              onNotify={showToast}
+              onUnauthorized={handleUnauthorized}
+            />
+          )}
+          {activeTab === 'messages' && (
+            <MessagesTab
               refreshTick={refreshTick}
               autoTick={autoTick}
               onNotify={showToast}

@@ -148,6 +148,14 @@ export function sanitizeText(value, maxLen = 200) {
   return s.trim().slice(0, maxLen);
 }
 
+export function sanitizeMarkdownBody(value, maxLen = 4000) {
+  return String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trim()
+    .slice(0, maxLen);
+}
+
 export function sanitizeProfileText(value, maxLen = 200, allowNewlines = false) {
   if (value === null || value === undefined) {
     return '';
@@ -911,6 +919,20 @@ export function serializeRedeemCode(row) {
     isActive: Boolean(row.is_active),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+export function serializePlayerMessage(row) {
+  return {
+    id: row.id,
+    scope: row.scope,
+    targetUserId: row.target_user_id || '',
+    targetUsername: row.target_username || '',
+    title: row.title || '',
+    bodyMarkdown: row.body_markdown || '',
+    senderUsername: row.sender_username || 'admin',
+    isRead: Boolean(row.is_read),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : (row.created_at || null),
   };
 }
 

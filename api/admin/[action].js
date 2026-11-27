@@ -14,11 +14,13 @@ import {
   loginPasswordSchema,
   requireAdminSession,
   runSecurityPreflight,
+  sanitizeMarkdownBody,
   sanitizeText,
   sendJson,
   serializeAdminUserRow,
   serializeAuditLog,
   serializeIpBlock,
+  serializePlayerMessage,
   serializeRedeemCode,
   serializeRoom,
   serializeRoomPlayer,
@@ -96,6 +98,15 @@ const redeemActionSchema = z.strictObject({
   descriptionId: z.string().max(240).optional(),
   descriptionEn: z.string().max(240).optional(),
   isActive: z.boolean().optional(),
+});
+
+const messagesActionSchema = z.strictObject({
+  action: z.enum(['send', 'delete']),
+  scope: z.enum(['global', 'user']).optional(),
+  targetUsername: z.string().trim().max(40).optional(),
+  title: z.string().max(120).optional(),
+  bodyMarkdown: z.string().max(4000).optional(),
+  messageId: z.string().uuid().optional(),
 });
 
 export default async function handler(req, res) {
@@ -965,6 +976,115 @@ export default async function handler(req, res) {
         return sendJson(res, 200, {
           ok: true,
           codes: codes.map(serializeRedeemCode),
+        });
+      }
+    }
+    return sendJson(res, 405, { ok: false, error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' });
+  }
+
+  if (action === 'messages') {
+    if (req.method === 'GET') {
+      const rows = await db.listAdminPlayerMessages({ limit: 100 });
+      return sendJson(res, 200, { ok: true, messages: rows.map(serializePlayerMessage) });
+    }
+    if (req.method === 'POST') {
+      const parsed = messagesActionSchema.safeParse(pre.body);
+      if (!parsed.success) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: formatZodError(parsed.error),
+          code: 'VALIDATION_ERROR',
+        });
+      }
+      const data = parsed.data;
+
+      if (data.action === 'send') {
+        const scope = data.scope === 'user' ? 'user' : 'global';
+        const bodyMarkdown = sanitizeMarkdownBody(data.bodyMarkdown, 4000);
+        if (!bodyMarkdown) {
+          return sendJson(res, 400, {
+            ok: false,
+            error: 'Isi pesan wajib diisi.',
+            code: 'VALIDATION_ERROR',
+          });
+        }
+        const title = sanitizeText(data.title || '', 120);
+
+        let target = null;
+        if (scope === 'user') {
+          target = await db.findUserByUsername(data.targetUsername || '');
+          if (!target) {
+            return sendJson(res, 404, {
+              ok: false,
+              error: 'Pemain dengan username tersebut tidak ditemukan.',
+              code: 'USER_NOT_FOUND',
+            });
+          }
+          if (target.role === 'admin' || db.isDashboardOnlyAdminUsername(target.username)) {
+            return sendJson(res, 400, {
+              ok: false,
+              error: 'Tidak dapat mengirim pesan ke akun admin dashboard.',
+              code: 'INVALID_TARGET_USER',
+            });
+          }
+        }
+
+        const created = await db.createPlayerMessage({
+          scope,
+          targetUserId: target ? target.id : null,
+          targetUsername: target ? target.username : '',
+          title,
+          bodyMarkdown,
+          senderUsername: auth.user.username,
+        });
+
+        await db.addAuditLog({
+          adminUserId: auth.user.id,
+          adminUsername: auth.user.username,
+          action: 'send_player_message',
+          targetType: scope === 'global' ? 'global' : 'user',
+          targetId: target ? target.id : 'all',
+          details: { scope, targetUsername: target ? target.username : '' },
+          ipAddress: pre.ip,
+        });
+
+        const list = await db.listAdminPlayerMessages({ limit: 100 });
+        return sendJson(res, 201, {
+          ok: true,
+          message: serializePlayerMessage(created),
+          messages: list.map(serializePlayerMessage),
+        });
+      }
+
+      if (data.action === 'delete') {
+        if (!data.messageId) {
+          return sendJson(res, 400, {
+            ok: false,
+            error: 'messageId wajib diisi.',
+            code: 'VALIDATION_ERROR',
+          });
+        }
+        const deleted = await db.deletePlayerMessage(data.messageId);
+        if (!deleted) {
+          return sendJson(res, 404, {
+            ok: false,
+            error: 'Pesan tidak ditemukan.',
+            code: 'NOT_FOUND',
+          });
+        }
+        await db.addAuditLog({
+          adminUserId: auth.user.id,
+          adminUsername: auth.user.username,
+          action: 'delete_player_message',
+          targetType: 'player_message',
+          targetId: data.messageId,
+          details: { scope: deleted.scope, targetUsername: deleted.target_username || '' },
+          ipAddress: pre.ip,
+        });
+        const list = await db.listAdminPlayerMessages({ limit: 100 });
+        return sendJson(res, 200, {
+          ok: true,
+          messages: list.map(serializePlayerMessage),
         });
       }
     }
